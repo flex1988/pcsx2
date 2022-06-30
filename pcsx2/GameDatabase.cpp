@@ -281,6 +281,7 @@ static const char* s_gs_hw_fix_names[] = {
 	"mergeSprite",
 	"wildArmsHack",
 	"pointListPalette",
+	"preRoundSprites",
 	"mipmap",
 	"trilinearFiltering",
 	"skipDrawStart",
@@ -319,6 +320,7 @@ bool GameDatabaseSchema::isUserHackHWFix(GSHWFixId id)
 		case GSHWFixId::TexturePreloading:
 		case GSHWFixId::ConservativeFramebuffer:
 		case GSHWFixId::PointListPalette:
+		case GSHWFixId::PreRoundSprites:
 			return false;
 
 #ifdef PCSX2_CORE
@@ -503,6 +505,9 @@ u32 GameDatabaseSchema::GameEntry::applyGSHardwareFixes(Pcsx2Config::GSOptions& 
 
 			case GSHWFixId::PointListPalette:
 				config.PointListPalette = (value > 0);
+				break;
+			case GSHWFixId::PreRoundSprites:
+				config.PreRoundSprites = (value > 0);
 				break;
 
 			case GSHWFixId::Mipmap:

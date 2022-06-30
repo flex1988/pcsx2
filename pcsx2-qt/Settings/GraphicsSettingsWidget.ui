@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>657</width>
+    <width>652</width>
     <height>890</height>
    </rect>
   </property>
@@ -278,20 +278,6 @@
            </property>
           </widget>
          </item>
-         <item row="0" column="0">
-          <widget class="QCheckBox" name="bilinearFiltering">
-           <property name="text">
-            <string>Bilinear Filtering</string>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="1">
-          <widget class="QCheckBox" name="internalResolutionScreenshots">
-           <property name="text">
-            <string>Internal Resolution Screenshots</string>
-           </property>
-          </widget>
-         </item>
          <item row="0" column="1">
           <widget class="QCheckBox" name="integerScaling">
            <property name="text">
@@ -299,17 +285,10 @@
            </property>
           </widget>
          </item>
-         <item row="2" column="1">
-          <widget class="QCheckBox" name="PCRTCOverscan">
+         <item row="0" column="0">
+          <widget class="QCheckBox" name="bilinearFiltering">
            <property name="text">
-            <string>Show Overscan</string>
-           </property>
-          </widget>
-         </item>
-         <item row="2" column="0">
-          <widget class="QCheckBox" name="PCRTCOffsets">
-           <property name="text">
-            <string>Screen Offsets</string>
+            <string>Bilinear Filtering</string>
            </property>
           </widget>
          </item>
@@ -323,6 +302,13 @@
            </property>
           </widget>
          </item>
+         <item row="1" column="1">
+          <widget class="QCheckBox" name="internalResolutionScreenshots">
+           <property name="text">
+            <string>Internal Resolution Screenshots</string>
+           </property>
+          </widget>
+         </item>
          <item row="4" column="1">
           <widget class="QCheckBox" name="PCRTCAntiBlur">
            <property name="toolTip">
@@ -333,6 +319,30 @@
            </property>
            <property name="shortcut">
             <string>Ctrl+S</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="0">
+          <widget class="QCheckBox" name="PCRTCOffsets">
+           <property name="text">
+            <string>Screen Offsets</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="QCheckBox" name="PCRTCOverscan">
+           <property name="text">
+            <string>Show Overscan</string>
+           </property>
+          </widget>
+         </item>
+         <item row="5" column="0">
+          <widget class="QCheckBox" name="PreRoundSprites">
+           <property name="toolTip">
+            <string>Attempts to pre-round sprite texel coordinates to resolve rounding issues. Helpful for games such as Beyond Good and Evil, and Manhunt</string>
+           </property>
+           <property name="text">
+            <string>Pre-Round Sprites</string>
            </property>
           </widget>
          </item>

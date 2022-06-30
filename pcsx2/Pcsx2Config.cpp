@@ -332,6 +332,7 @@ Pcsx2Config::GSOptions::GSOptions()
 	Mipmap = true;
 	AA1 = true;
 	PointListPalette = false;
+	PreRoundSprites = false;
 
 	ManualUserHacks = false;
 	UserHacks_AlignSpriteX = false;
@@ -533,6 +534,7 @@ void Pcsx2Config::GSOptions::ReloadIniSettings()
 	GSSettingBool(OsdShowResolution);
 	GSSettingBool(OsdShowGSStats);
 	GSSettingBool(OsdShowIndicators);
+	GSSettingBoolEx(PreRoundSprites, "preround_sprites");
 
 	GSSettingBool(HWDisableReadbacks);
 	GSSettingBoolEx(AccurateDATE, "accurate_date");

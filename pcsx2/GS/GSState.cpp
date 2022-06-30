@@ -1830,6 +1830,58 @@ void GSState::FlushPrim()
 			ASSERT((int)unused < GSUtil::GetVertexCount(PRIM->PRIM));
 		}
 
+		// Texel coordinate rounding
+		// Helps Beyond Good & Evil (water) and Manhunt (lights shining through objects).
+		// Dark Cloud 2 also benefits in some ways but is broken in others.
+		// Can help with some alignment issues when upscaling too, and is for both Software and Hardware renderers.
+		// This is *NOT* 100% safe, some games hate it (Gran Turismo 4's post processing for example).
+		// I'm sure some of this is wrong, so as of now it serves as a hack fix.
+		if (m_env.PRIM.TME && !m_context->TEX1.MMAG && !(m_context->TEX1.MMIN & 1) && GSConfig.PreRoundSprites)
+		{
+			if (m_env.PRIM.FST) // UV's
+			{
+				for (int i = 0; i < m_index.tail; i++)
+				{
+					GSVertex* v = &m_vertex.buff[m_index.buff[i]];
+
+					if ((v->U & 0xF) < 0x8 && v->U >= 0x10)
+					{
+						v->U = (v->U - 0x10);
+					}
+					if ((v->V & 0xF) < 0x8 && v->V >= 0x10)
+					{
+						v->V = (v->V - 0x10);
+					}
+					v->U = (v->U & ~0xF);
+					v->V = (v->V & ~0xF);
+				}
+			}
+			else
+			{
+				for (int i = 0; i < m_vertex.tail; i++)
+				{
+					GSVertex* v = &m_vertex.buff[i];
+
+					int x = (int)(static_cast<float>(1 << m_context->TEX0.TW) * (v->ST.S / v->RGBAQ.Q) * 16.0f);
+					int y = (int)(static_cast<float>(1 << m_context->TEX0.TH) * (v->ST.T / v->RGBAQ.Q) * 16.0f);
+
+					if ((x & 0xF) < 0x8)
+					{
+						x = (x - 0x10);
+					}
+					if ((y & 0xF) < 0x8)
+					{
+						y = (y - 0x10);
+					}
+					x = (x & ~0xF);
+					y = (y & ~0xF);
+
+					v->ST.S = ((static_cast<float>(x) / 16.0f) * v->RGBAQ.Q) / static_cast<float>(1 << m_context->TEX0.TW);
+					v->ST.T = ((static_cast<float>(y) / 16.0f) * v->RGBAQ.Q) / static_cast<float>(1 << m_context->TEX0.TH);
+				}
+			}
+		}
+
 		// If the PSM format of Z is invalid, but it is masked (no write) and ZTST is set to ALWAYS pass (no test, just allow)
 		// we can ignore the Z format, since it won't be used in the draw (Star Ocean 3 transitions)
 		const bool ignoreZ = m_context->ZBUF.ZMSK && m_context->TEST.ZTST == 1;
@@ -1869,7 +1921,6 @@ void GSState::FlushPrim()
 		if (unused > 0)
 		{
 			memcpy(m_vertex.buff, buff, sizeof(GSVertex) * unused);
-
 			m_vertex.tail = unused;
 			m_vertex.next = next > head ? next - head : 0;
 		}
@@ -3030,9 +3081,10 @@ __forceinline void GSState::VertexKick(u32 skip)
 	GSVector4i v1(m_v.m[1]);
 
 	GSVector4i* RESTRICT tailptr = (GSVector4i*)&m_vertex.buff[tail];
-
+	
 	tailptr[0] = v0;
 	tailptr[1] = v1;
+
 
 	const GSVector4i xy = v1.xxxx().u16to32().sub32(m_ofxy);
 
