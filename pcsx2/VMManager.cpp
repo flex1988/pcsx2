@@ -68,42 +68,6 @@
 #include "common/RedtapeWindows.h"
 #endif
 
-namespace VMManager
-{
-	static void LoadSettings();
-	static void ApplyGameFixes();
-	static bool UpdateGameSettingsLayer();
-	static void CheckForConfigChanges(const Pcsx2Config& old_config);
-	static void CheckForCPUConfigChanges(const Pcsx2Config& old_config);
-	static void CheckForGSConfigChanges(const Pcsx2Config& old_config);
-	static void CheckForFramerateConfigChanges(const Pcsx2Config& old_config);
-	static void CheckForPatchConfigChanges(const Pcsx2Config& old_config);
-	static void CheckForSPU2ConfigChanges(const Pcsx2Config& old_config);
-	static void CheckForDEV9ConfigChanges(const Pcsx2Config& old_config);
-	static void CheckForMemoryCardConfigChanges(const Pcsx2Config& old_config);
-
-	static bool AutoDetectSource(const std::string& filename);
-	static bool ApplyBootParameters(const VMBootParameters& params, std::string* state_to_load);
-	static bool CheckBIOSAvailability();
-	static void LoadPatches(const std::string& serial, u32 crc,
-		bool show_messages, bool show_messages_when_disabled);
-	static void UpdateRunningGame(bool resetting, bool game_starting);
-
-	static std::string GetCurrentSaveStateFileName(s32 slot);
-	static bool DoLoadState(const char* filename);
-	static bool DoSaveState(const char* filename, s32 slot_for_message, bool zip_on_thread);
-	static void ZipSaveState(std::unique_ptr<ArchiveEntryList> elist,
-		std::unique_ptr<SaveStateScreenshotData> screenshot, std::string osd_key,
-		const char* filename, s32 slot_for_message);
-	static void ZipSaveStateOnThread(std::unique_ptr<ArchiveEntryList> elist,
-		std::unique_ptr<SaveStateScreenshotData> screenshot, std::string osd_key,
-		std::string filename, s32 slot_for_message);
-
-	static void SetTimerResolutionIncreased(bool enabled);
-	static void EnsureCPUInfoInitialized();
-	static void SetEmuThreadAffinities();
-} // namespace VMManager
-
 static std::unique_ptr<SysMainMemory> s_vm_memory;
 static std::unique_ptr<SysCpuProviderPack> s_cpu_provider_pack;
 static std::unique_ptr<INISettingsInterface> s_game_settings_interface;
@@ -275,6 +239,39 @@ static void SetMTVUAndAffinityControlDefault(Pcsx2Config& config)
 
 namespace VMManager
 {
+
+static void LoadSettings();
+static void ApplyGameFixes();
+static bool UpdateGameSettingsLayer();
+static void CheckForConfigChanges(const Pcsx2Config& old_config);
+static void CheckForCPUConfigChanges(const Pcsx2Config& old_config);
+static void CheckForGSConfigChanges(const Pcsx2Config& old_config);
+static void CheckForFramerateConfigChanges(const Pcsx2Config& old_config);
+static void CheckForPatchConfigChanges(const Pcsx2Config& old_config);
+static void CheckForSPU2ConfigChanges(const Pcsx2Config& old_config);
+static void CheckForDEV9ConfigChanges(const Pcsx2Config& old_config);
+static void CheckForMemoryCardConfigChanges(const Pcsx2Config& old_config);
+
+static bool AutoDetectSource(const std::string& filename);
+static bool ApplyBootParameters(const VMBootParameters& params, std::string* state_to_load);
+static bool CheckBIOSAvailability();
+static void LoadPatches(const std::string& serial, u32 crc,
+	bool show_messages, bool show_messages_when_disabled);
+static void UpdateRunningGame(bool resetting, bool game_starting);
+
+static std::string GetCurrentSaveStateFileName(s32 slot);
+static bool DoLoadState(const char* filename);
+static bool DoSaveState(const char* filename, s32 slot_for_message, bool zip_on_thread);
+static void ZipSaveState(std::unique_ptr<ArchiveEntryList> elist,
+	std::unique_ptr<SaveStateScreenshotData> screenshot, std::string osd_key,
+	const char* filename, s32 slot_for_message);
+static void ZipSaveStateOnThread(std::unique_ptr<ArchiveEntryList> elist,
+	std::unique_ptr<SaveStateScreenshotData> screenshot, std::string osd_key,
+	std::string filename, s32 slot_for_message);
+
+static void SetTimerResolutionIncreased(bool enabled);
+static void EnsureCPUInfoInitialized();
+static void SetEmuThreadAffinities();
 
 bool PerformEarlyHardwareChecks(const char** error)
 {
