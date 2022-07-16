@@ -207,104 +207,37 @@ void SetState(VMState state)
 	}
 }
 
-}
-
-
-bool VMManager::HasValidVM()
+bool HasValidVM()
 {
 	const VMState state = s_state.load(std::memory_order_acquire);
 	return (state == VMState::Running || state == VMState::Paused);
 }
 
-std::string VMManager::GetDiscPath()
+std::string GetDiscPath()
 {
 	std::unique_lock lock(s_info_mutex);
 	return s_disc_path;
 }
 
-u32 VMManager::GetGameCRC()
+u32 GetGameCRC()
 {
 	std::unique_lock lock(s_info_mutex);
 	return s_game_crc;
 }
 
-std::string VMManager::GetGameSerial()
+std::string GetGameSerial()
 {
 	std::unique_lock lock(s_info_mutex);
 	return s_game_serial;
 }
 
-std::string VMManager::GetGameName()
+std::string GetGameName()
 {
 	std::unique_lock lock(s_info_mutex);
 	return s_game_name;
 }
 
-bool VMManager::Internal::InitializeGlobals()
-{
-	// On Win32, we have a bunch of things which use COM (e.g. SDL, XAudio2, etc).
-	// We need to initialize COM first, before anything else does, because otherwise they might
-	// initialize it in single-threaded/apartment mode, which can't be changed to multithreaded.
-#ifdef _WIN32
-	HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-	if (FAILED(hr))
-	{
-		Host::ReportErrorAsync("Error", fmt::format("CoInitializeEx() failed: {:08X}", hr));
-		return false;
-	}
-#endif
-
-	x86caps.Identify();
-	x86caps.CountCores();
-	x86caps.SIMD_EstablishMXCSRmask();
-	x86caps.CalculateMHz();
-	SysLogMachineCaps();
-
-	return true;
-}
-
-void VMManager::Internal::ReleaseGlobals()
-{
-#ifdef _WIN32
-	CoUninitialize();
-#endif
-}
-
-bool VMManager::Internal::InitializeMemory()
-{
-	pxAssert(!s_vm_memory && !s_cpu_provider_pack);
-
-	s_vm_memory = std::make_unique<SysMainMemory>();
-	s_cpu_provider_pack = std::make_unique<SysCpuProviderPack>();
-
-	s_vm_memory->ReserveAll();
-	return true;
-}
-
-void VMManager::Internal::ReleaseMemory()
-{
-	std::vector<u8>().swap(s_widescreen_cheats_data);
-	s_widescreen_cheats_loaded = false;
-	std::vector<u8>().swap(s_no_interlacing_cheats_data);
-	s_no_interlacing_cheats_loaded = false;
-
-	s_vm_memory->DecommitAll();
-	s_vm_memory->ReleaseAll();
-	s_vm_memory.reset();
-	s_cpu_provider_pack.reset();
-}
-
-SysMainMemory& GetVmMemory()
-{
-	return *s_vm_memory;
-}
-
-SysCpuProviderPack& GetCpuProviders()
-{
-	return *s_cpu_provider_pack;
-}
-
-void VMManager::LoadSettings()
+void LoadSettings()
 {
 	std::unique_lock<std::mutex> lock = Host::GetSettingsLock();
 	SettingsInterface* si = Host::GetSettingsInterface();
@@ -341,7 +274,7 @@ void VMManager::LoadSettings()
 		ApplyGameFixes();
 }
 
-void VMManager::ApplyGameFixes()
+void ApplyGameFixes()
 {
 	s_active_game_fixes = 0;
 
@@ -353,7 +286,7 @@ void VMManager::ApplyGameFixes()
 	s_active_game_fixes += game->applyGSHardwareFixes(EmuConfig.GS);
 }
 
-std::string VMManager::GetGameSettingsPath(const std::string_view& game_serial, u32 game_crc)
+std::string GetGameSettingsPath(const std::string_view& game_serial, u32 game_crc)
 {
 	std::string sanitized_serial(game_serial);
 	Path::SanitizeFileName(sanitized_serial);
@@ -363,9 +296,80 @@ std::string VMManager::GetGameSettingsPath(const std::string_view& game_serial, 
                Path::Combine(EmuFolders::GameSettings, fmt::format("{}_{:08X}.ini", sanitized_serial, game_crc));
 }
 
-std::string VMManager::GetInputProfilePath(const std::string_view& name)
+std::string GetInputProfilePath(const std::string_view& name)
 {
 	return Path::Combine(EmuFolders::InputProfiles, fmt::format("{}.ini", name));
+}
+
+bool Internal::InitializeGlobals()
+{
+	// On Win32, we have a bunch of things which use COM (e.g. SDL, XAudio2, etc).
+	// We need to initialize COM first, before anything else does, because otherwise they might
+	// initialize it in single-threaded/apartment mode, which can't be changed to multithreaded.
+#ifdef _WIN32
+	HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+	if (FAILED(hr))
+	{
+		Host::ReportErrorAsync("Error", fmt::format("CoInitializeEx() failed: {:08X}", hr));
+		return false;
+	}
+#endif
+
+	x86caps.Identify();
+	x86caps.CountCores();
+	x86caps.SIMD_EstablishMXCSRmask();
+	x86caps.CalculateMHz();
+	SysLogMachineCaps();
+
+	return true;
+}
+
+void Internal::ReleaseGlobals()
+{
+#ifdef _WIN32
+	CoUninitialize();
+#endif
+}
+
+bool Internal::InitializeMemory()
+{
+	pxAssert(!s_vm_memory && !s_cpu_provider_pack);
+
+	s_vm_memory = std::make_unique<SysMainMemory>();
+	s_cpu_provider_pack = std::make_unique<SysCpuProviderPack>();
+
+	s_vm_memory->ReserveAll();
+	return true;
+}
+
+void Internal::ReleaseMemory()
+{
+	std::vector<u8>().swap(s_widescreen_cheats_data);
+	s_widescreen_cheats_loaded = false;
+	std::vector<u8>().swap(s_no_interlacing_cheats_data);
+	s_no_interlacing_cheats_loaded = false;
+
+	s_vm_memory->DecommitAll();
+	s_vm_memory->ReleaseAll();
+	s_vm_memory.reset();
+	s_cpu_provider_pack.reset();
+}
+
+}
+
+
+
+
+
+
+SysMainMemory& GetVmMemory()
+{
+	return *s_vm_memory;
+}
+
+SysCpuProviderPack& GetCpuProviders()
+{
+	return *s_cpu_provider_pack;
 }
 
 void VMManager::RequestDisplaySize(float scale /*= 0.0f*/)
