@@ -136,6 +136,143 @@ static u32 s_frame_advance_count = 0;
 static u32 s_mxcsr_saved;
 static std::optional<LimiterModeType> s_limiter_mode_prior_to_hold_interaction;
 
+static LimiterModeType GetInitialLimiterMode()
+{
+	return EmuConfig.GS.FrameLimitEnable ? LimiterModeType::Nominal : LimiterModeType::Unlimited;
+}
+
+static std::vector<u32> s_processor_list;
+static std::once_flag s_processor_list_initialized;
+
+#if defined(__linux__) || defined(_WIN32)
+
+#include "cpuinfo.h"
+
+static u32 GetProcessorIdForProcessor(const cpuinfo_processor* proc)
+{
+#if defined(__linux__)
+	return static_cast<u32>(proc->linux_id);
+#elif defined(_WIN32)
+	return static_cast<u32>(proc->windows_processor_id);
+#else
+	return 0;
+#endif
+}
+
+static void InitializeCPUInfo()
+{
+	if (!cpuinfo_initialize())
+	{
+		Console.Error("Failed to initialize cpuinfo");
+		return;
+	}
+
+	const u32 cluster_count = cpuinfo_get_clusters_count();
+	if (cluster_count == 0)
+	{
+		Console.Error("Invalid CPU count returned");
+		return;
+	}
+
+	Console.WriteLn(Color_StrongYellow, "Processor count: %u cores, %u processors", cpuinfo_get_cores_count(), cpuinfo_get_processors_count());
+	Console.WriteLn(Color_StrongYellow, "Cluster count: %u", cluster_count);
+
+	static std::vector<const cpuinfo_processor*> ordered_processors;
+	for (u32 i = 0; i < cluster_count; i++)
+	{
+		const cpuinfo_cluster* cluster = cpuinfo_get_cluster(i);
+		for (u32 j = 0; j < cluster->processor_count; j++)
+		{
+			const cpuinfo_processor* proc = cpuinfo_get_processor(cluster->processor_start + j);
+			if (!proc)
+				continue;
+
+			ordered_processors.push_back(proc);
+		}
+	}
+	// find the large and small clusters based on frequency
+	// this is assuming the large cluster is always clocked higher
+	// sort based on core, so that hyperthreads get pushed down
+	std::sort(ordered_processors.begin(), ordered_processors.end(), [](const cpuinfo_processor* lhs, const cpuinfo_processor* rhs) {
+		return (lhs->core->frequency > rhs->core->frequency || lhs->smt_id < rhs->smt_id);
+	});
+
+	s_processor_list.reserve(ordered_processors.size());
+	std::stringstream ss;
+	ss << "Ordered processor list: ";
+	for (const cpuinfo_processor* proc : ordered_processors)
+	{
+		if (proc != ordered_processors.front())
+			ss << ", ";
+
+		const u32 procid = GetProcessorIdForProcessor(proc);
+		ss << procid;
+		if (proc->smt_id != 0)
+			ss << "[SMT " << proc->smt_id << "]";
+
+		s_processor_list.push_back(procid);
+	}
+	Console.WriteLn(ss.str());
+}
+
+static void SetMTVUAndAffinityControlDefault(Pcsx2Config& config)
+{
+	VMManager::EnsureCPUInfoInitialized();
+
+	const u32 cluster_count = cpuinfo_get_clusters_count();
+	if (cluster_count == 0)
+	{
+		Console.Error("Invalid CPU count returned");
+		return;
+	}
+
+	Console.WriteLn("Cluster count: %u", cluster_count);
+
+	for (u32 i = 0; i < cluster_count; i++)
+	{
+		const cpuinfo_cluster* cluster = cpuinfo_get_cluster(i);
+		Console.WriteLn("  Cluster %u: %u cores and %u processors at %u MHz",
+			i, cluster->core_count, cluster->processor_count, static_cast<u32>(cluster->frequency /* / 1000000u*/));
+	}
+
+	const bool has_big_little = cluster_count > 1;
+	Console.WriteLn("Big-Little: %s", has_big_little ? "yes" : "no");
+
+	const u32 big_cores = cpuinfo_get_cluster(0)->core_count + ((cluster_count > 2) ? cpuinfo_get_cluster(1)->core_count : 0u);
+	Console.WriteLn("Guessing we have %u big/medium cores...", big_cores);
+
+	bool mtvu_enable;
+	bool affinity_control;
+	if (big_cores >= 3 || big_cores == 1)
+	{
+		Console.WriteLn("  So enabling MTVU and disabling affinity control");
+		mtvu_enable = true;
+		affinity_control = false;
+	}
+	else
+	{
+		Console.WriteLn("  So disabling MTVU and enabling affinity control");
+		mtvu_enable = false;
+		affinity_control = true;
+	}
+
+	config.Speedhacks.vuThread = mtvu_enable;
+	config.Cpu.AffinityControlMode = affinity_control ? 1 : 0;
+}
+
+#else
+
+static void InitializeCPUInfo()
+{
+	DevCon.WriteLn("(VMManager) InitializeCPUInfo() not implemented.");
+}
+
+static void SetMTVUAndAffinityControlDefault(Pcsx2Config& config)
+{
+}
+
+#endif
+
 namespace VMManager
 {
 
@@ -1314,6 +1451,332 @@ void SetPaused(bool paused)
 	SetState(paused ? VMState::Paused : VMState::Running);
 }
 
+void CheckForCPUConfigChanges(const Pcsx2Config& old_config)
+{
+	if (EmuConfig.Cpu == old_config.Cpu &&
+		EmuConfig.Gamefixes == old_config.Gamefixes &&
+		EmuConfig.Speedhacks == old_config.Speedhacks &&
+		EmuConfig.Profiler == old_config.Profiler)
+	{
+		return;
+	}
+
+	Console.WriteLn("Updating CPU configuration...");
+	SetCPUState(EmuConfig.Cpu.sseMXCSR, EmuConfig.Cpu.sseVUMXCSR);
+	SysClearExecutionCache();
+	memBindConditionalHandlers();
+
+	// did we toggle recompilers?
+	if (EmuConfig.Cpu.CpusChanged(old_config.Cpu))
+	{
+		// This has to be done asynchronously, since we're still executing the
+		// cpu when this function is called. Break the execution as soon as
+		// possible and reset next time we're called.
+		s_cpu_implementation_changed = true;
+	}
+
+	if (EmuConfig.Cpu.AffinityControlMode != old_config.Cpu.AffinityControlMode ||
+		EmuConfig.Speedhacks.vuThread != old_config.Speedhacks.vuThread)
+	{
+		SetEmuThreadAffinities();
+	}
+}
+
+void CheckForGSConfigChanges(const Pcsx2Config& old_config)
+{
+	if (EmuConfig.GS == old_config.GS)
+		return;
+
+	Console.WriteLn("Updating GS configuration...");
+
+	if (EmuConfig.GS.FrameLimitEnable != old_config.GS.FrameLimitEnable)
+		EmuConfig.LimiterMode = GetInitialLimiterMode();
+
+	gsUpdateFrequency(EmuConfig);
+	UpdateVSyncRate();
+	frameLimitReset();
+	GetMTGS().ApplySettings();
+	GetMTGS().SetVSync(EmuConfig.GetEffectiveVsyncMode());
+}
+
+void CheckForFramerateConfigChanges(const Pcsx2Config& old_config)
+{
+	if (EmuConfig.Framerate == old_config.Framerate)
+		return;
+
+	Console.WriteLn("Updating frame rate configuration");
+	gsUpdateFrequency(EmuConfig);
+	UpdateVSyncRate();
+	frameLimitReset();
+	GetMTGS().SetVSync(EmuConfig.GetEffectiveVsyncMode());
+}
+
+void CheckForPatchConfigChanges(const Pcsx2Config& old_config)
+{
+	if (EmuConfig.EnableCheats == old_config.EnableCheats &&
+		EmuConfig.EnableWideScreenPatches == old_config.EnableWideScreenPatches &&
+		EmuConfig.EnablePatches == old_config.EnablePatches)
+	{
+		return;
+	}
+
+	ReloadPatches(true, true);
+}
+
+void CheckForSPU2ConfigChanges(const Pcsx2Config& old_config)
+{
+	if (EmuConfig.SPU2 == old_config.SPU2)
+		return;
+
+	// TODO: Don't reinit on volume changes.
+
+	Console.WriteLn("Updating SPU2 configuration");
+
+	// kinda lazy, but until we move spu2 over...
+	freezeData fd = {};
+	if (SPU2freeze(FreezeAction::Size, &fd) != 0)
+	{
+		Console.Error("(CheckForSPU2ConfigChanges) Failed to get SPU2 freeze size");
+		return;
+	}
+
+	std::unique_ptr<u8[]> fd_data = std::make_unique<u8[]>(fd.size);
+	fd.data = fd_data.get();
+	if (SPU2freeze(FreezeAction::Save, &fd) != 0)
+	{
+		Console.Error("(CheckForSPU2ConfigChanges) Failed to freeze SPU2");
+		return;
+	}
+
+	SPU2close();
+	SPU2shutdown();
+	if (SPU2init() != 0 || SPU2open() != 0)
+	{
+		Console.Error("(CheckForSPU2ConfigChanges) Failed to reopen SPU2, we'll probably crash :(");
+		return;
+	}
+
+	if (SPU2freeze(FreezeAction::Load, &fd) != 0)
+	{
+		Console.Error("(CheckForSPU2ConfigChanges) Failed to unfreeze SPU2");
+		return;
+	}
+}
+
+void CheckForDEV9ConfigChanges(const Pcsx2Config& old_config)
+{
+	if (EmuConfig.DEV9 == old_config.DEV9)
+		return;
+
+	DEV9CheckChanges(old_config);
+}
+
+void CheckForMemoryCardConfigChanges(const Pcsx2Config& old_config)
+{
+	bool changed = false;
+
+	for (size_t i = 0; i < std::size(EmuConfig.Mcd); i++)
+	{
+		if (EmuConfig.Mcd[i].Enabled != old_config.Mcd[i].Enabled ||
+			EmuConfig.Mcd[i].Filename != old_config.Mcd[i].Filename)
+		{
+			changed = true;
+			break;
+		}
+	}
+
+	changed |= (EmuConfig.McdEnableEjection != old_config.McdEnableEjection);
+	changed |= (EmuConfig.McdFolderAutoManage != old_config.McdFolderAutoManage);
+
+	if (!changed)
+		return;
+
+	Console.WriteLn("Updating memory card configuration");
+
+	FileMcd_EmuClose();
+	FileMcd_EmuOpen();
+
+	// force card eject when files change
+	for (u32 port = 0; port < 2; port++)
+	{
+		for (u32 slot = 0; slot < 4; slot++)
+		{
+			const uint index = FileMcd_ConvertToSlot(port, slot);
+			if (EmuConfig.Mcd[index].Enabled != old_config.Mcd[index].Enabled ||
+				EmuConfig.Mcd[index].Filename != old_config.Mcd[index].Filename)
+			{
+				Console.WriteLn("Replugging memory card %u (port %u slot %u) due to source change", index, port, slot);
+				SetForceMcdEjectTimeoutNow(port, slot);
+			}
+		}
+	}
+
+	// force reindexing, mc folder code is janky
+	std::string sioSerial;
+	{
+		std::unique_lock lock(s_info_mutex);
+		if (const GameDatabaseSchema::GameEntry* game = GameDatabase::findGame(s_game_serial))
+			sioSerial = game->memcardFiltersAsString();
+		if (sioSerial.empty())
+			sioSerial = s_game_serial;
+	}
+	sioSetGameSerial(sioSerial);
+}
+
+void CheckForConfigChanges(const Pcsx2Config& old_config)
+{
+	CheckForCPUConfigChanges(old_config);
+	CheckForGSConfigChanges(old_config);
+	CheckForFramerateConfigChanges(old_config);
+	CheckForPatchConfigChanges(old_config);
+	CheckForSPU2ConfigChanges(old_config);
+	CheckForDEV9ConfigChanges(old_config);
+	CheckForMemoryCardConfigChanges(old_config);
+
+	if (EmuConfig.EnableCheats != old_config.EnableCheats ||
+		EmuConfig.EnableWideScreenPatches != old_config.EnableWideScreenPatches ||
+		EmuConfig.EnableNoInterlacingPatches != old_config.EnableNoInterlacingPatches)
+	{
+		VMManager::ReloadPatches(true, true);
+	}
+}
+
+void ApplySettings()
+{
+	Console.WriteLn("Applying settings...");
+
+	// if we're running, ensure the threads are synced
+	const bool running = (s_state.load(std::memory_order_acquire) == VMState::Running);
+	if (running)
+	{
+		if (THREAD_VU1)
+			vu1Thread.WaitVU();
+		GetMTGS().WaitGS(false);
+	}
+
+	const Pcsx2Config old_config(EmuConfig);
+	LoadSettings();
+
+	if (HasValidVM())
+		CheckForConfigChanges(old_config);
+}
+
+bool ReloadGameSettings()
+{
+	if (!UpdateGameSettingsLayer())
+		return false;
+
+	ApplySettings();
+	return true;
+}
+
+void SetHardwareDependentDefaultSettings(Pcsx2Config& config)
+{
+	SetMTVUAndAffinityControlDefault(config);
+}
+
+const std::vector<u32>& GetSortedProcessorList()
+{
+	EnsureCPUInfoInitialized();
+	return s_processor_list;
+}
+
+#ifdef _WIN32
+
+#include "common/RedtapeWindows.h"
+
+static bool s_timer_resolution_increased = false;
+
+void SetTimerResolutionIncreased(bool enabled)
+{
+	if (s_timer_resolution_increased == enabled)
+		return;
+
+	if (enabled)
+	{
+		s_timer_resolution_increased = (timeBeginPeriod(1) == TIMERR_NOERROR);
+	}
+	else if (s_timer_resolution_increased)
+	{
+		timeEndPeriod(1);
+		s_timer_resolution_increased = false;
+	}
+}
+
+#else
+
+void SetTimerResolutionIncreased(bool enabled)
+{
+}
+
+#endif
+
+void EnsureCPUInfoInitialized()
+{
+	std::call_once(s_processor_list_initialized, InitializeCPUInfo);
+}
+
+void SetEmuThreadAffinities()
+{
+	EnsureCPUInfoInitialized();
+
+	if (s_processor_list.empty())
+	{
+		// not supported on this platform
+		return;
+	}
+
+	if (EmuConfig.Cpu.AffinityControlMode == 0 ||
+		s_processor_list.size() < (EmuConfig.Speedhacks.vuThread ? 3 : 2))
+	{
+		if (EmuConfig.Cpu.AffinityControlMode != 0)
+			Console.Error("Insufficient processors for affinity control.");
+
+		GetMTGS().GetThreadHandle().SetAffinity(0);
+		vu1Thread.GetThreadHandle().SetAffinity(0);
+		s_vm_thread_handle.SetAffinity(0);
+		return;
+	}
+
+	static constexpr u8 processor_assignment[7][2][3] = {
+		//EE xx GS  EE VU GS
+		{{0, 2, 1}, {0, 1, 2}}, // Disabled
+		{{0, 2, 1}, {0, 1, 2}}, // EE > VU > GS
+		{{0, 2, 1}, {0, 2, 1}}, // EE > GS > VU
+		{{0, 2, 1}, {1, 0, 2}}, // VU > EE > GS
+		{{1, 2, 0}, {2, 0, 1}}, // VU > GS > EE
+		{{1, 2, 0}, {1, 2, 0}}, // GS > EE > VU
+		{{1, 2, 0}, {2, 1, 0}}, // GS > VU > EE
+	};
+
+	// steal vu's thread if mtvu is off
+	const u8* this_proc_assigment = processor_assignment[EmuConfig.Cpu.AffinityControlMode][EmuConfig.Speedhacks.vuThread];
+	const u32 ee_index = s_processor_list[this_proc_assigment[0]];
+	const u32 vu_index = s_processor_list[this_proc_assigment[1]];
+	const u32 gs_index = s_processor_list[this_proc_assigment[2]];
+	Console.WriteLn("Processor order assignment: EE=%u, VU=%u, GS=%u",
+		this_proc_assigment[0], this_proc_assigment[1], this_proc_assigment[2]);
+
+	const u64 ee_affinity = static_cast<u64>(1) << ee_index;
+	Console.WriteLn(Color_StrongGreen, "EE thread is on processor %u (0x%llx)", ee_index, ee_affinity);
+	s_vm_thread_handle.SetAffinity(ee_affinity);
+
+	if (EmuConfig.Speedhacks.vuThread)
+	{
+		const u64 vu_affinity = static_cast<u64>(1) << vu_index;
+		Console.WriteLn(Color_StrongGreen, "VU thread is on processor %u (0x%llx)", vu_index, vu_affinity);
+		vu1Thread.GetThreadHandle().SetAffinity(vu_affinity);
+	}
+	else
+	{
+		vu1Thread.GetThreadHandle().SetAffinity(0);
+	}
+
+	const u64 gs_affinity = static_cast<u64>(1) << gs_index;
+	Console.WriteLn(Color_StrongGreen, "GS thread is on processor %u (0x%llx)", gs_index, gs_affinity);
+	GetMTGS().GetThreadHandle().SetAffinity(gs_affinity);
+}
+
 bool Internal::InitializeGlobals()
 {
 	// On Win32, we have a bunch of things which use COM (e.g. SDL, XAudio2, etc).
@@ -1367,8 +1830,7 @@ void Internal::ReleaseMemory()
 	s_vm_memory.reset();
 	s_cpu_provider_pack.reset();
 }
-
-}
+} //namespace VMManager
 
 SysMainMemory& GetVmMemory()
 {
@@ -1379,18 +1841,6 @@ SysCpuProviderPack& GetCpuProviders()
 {
 	return *s_cpu_provider_pack;
 }
-
-
-
-
-
-
-
-static LimiterModeType GetInitialLimiterMode()
-{
-	return EmuConfig.GS.FrameLimitEnable ? LimiterModeType::Nominal : LimiterModeType::Unlimited;
-}
-
 
 
 const std::string& VMManager::Internal::GetElfOverride()
@@ -1442,224 +1892,7 @@ void VMManager::Internal::VSyncOnCPUThread()
 	InputManager::PollSources();
 }
 
-void VMManager::CheckForCPUConfigChanges(const Pcsx2Config& old_config)
-{
-	if (EmuConfig.Cpu == old_config.Cpu &&
-		EmuConfig.Gamefixes == old_config.Gamefixes &&
-		EmuConfig.Speedhacks == old_config.Speedhacks &&
-		EmuConfig.Profiler == old_config.Profiler)
-	{
-		return;
-	}
 
-	Console.WriteLn("Updating CPU configuration...");
-	SetCPUState(EmuConfig.Cpu.sseMXCSR, EmuConfig.Cpu.sseVUMXCSR);
-	SysClearExecutionCache();
-	memBindConditionalHandlers();
-
-	// did we toggle recompilers?
-	if (EmuConfig.Cpu.CpusChanged(old_config.Cpu))
-	{
-		// This has to be done asynchronously, since we're still executing the
-		// cpu when this function is called. Break the execution as soon as
-		// possible and reset next time we're called.
-		s_cpu_implementation_changed = true;
-	}
-
-	if (EmuConfig.Cpu.AffinityControlMode != old_config.Cpu.AffinityControlMode ||
-		EmuConfig.Speedhacks.vuThread != old_config.Speedhacks.vuThread)
-	{
-		SetEmuThreadAffinities();
-	}
-}
-
-void VMManager::CheckForGSConfigChanges(const Pcsx2Config& old_config)
-{
-	if (EmuConfig.GS == old_config.GS)
-		return;
-
-	Console.WriteLn("Updating GS configuration...");
-
-	if (EmuConfig.GS.FrameLimitEnable != old_config.GS.FrameLimitEnable)
-		EmuConfig.LimiterMode = GetInitialLimiterMode();
-
-	gsUpdateFrequency(EmuConfig);
-	UpdateVSyncRate();
-	frameLimitReset();
-	GetMTGS().ApplySettings();
-	GetMTGS().SetVSync(EmuConfig.GetEffectiveVsyncMode());
-}
-
-void VMManager::CheckForFramerateConfigChanges(const Pcsx2Config& old_config)
-{
-	if (EmuConfig.Framerate == old_config.Framerate)
-		return;
-
-	Console.WriteLn("Updating frame rate configuration");
-	gsUpdateFrequency(EmuConfig);
-	UpdateVSyncRate();
-	frameLimitReset();
-	GetMTGS().SetVSync(EmuConfig.GetEffectiveVsyncMode());
-}
-
-void VMManager::CheckForPatchConfigChanges(const Pcsx2Config& old_config)
-{
-	if (EmuConfig.EnableCheats == old_config.EnableCheats &&
-		EmuConfig.EnableWideScreenPatches == old_config.EnableWideScreenPatches &&
-		EmuConfig.EnablePatches == old_config.EnablePatches)
-	{
-		return;
-	}
-
-	ReloadPatches(true, true);
-}
-
-void VMManager::CheckForSPU2ConfigChanges(const Pcsx2Config& old_config)
-{
-	if (EmuConfig.SPU2 == old_config.SPU2)
-		return;
-
-	// TODO: Don't reinit on volume changes.
-
-	Console.WriteLn("Updating SPU2 configuration");
-
-	// kinda lazy, but until we move spu2 over...
-	freezeData fd = {};
-	if (SPU2freeze(FreezeAction::Size, &fd) != 0)
-	{
-		Console.Error("(CheckForSPU2ConfigChanges) Failed to get SPU2 freeze size");
-		return;
-	}
-
-	std::unique_ptr<u8[]> fd_data = std::make_unique<u8[]>(fd.size);
-	fd.data = fd_data.get();
-	if (SPU2freeze(FreezeAction::Save, &fd) != 0)
-	{
-		Console.Error("(CheckForSPU2ConfigChanges) Failed to freeze SPU2");
-		return;
-	}
-
-	SPU2close();
-	SPU2shutdown();
-	if (SPU2init() != 0 || SPU2open() != 0)
-	{
-		Console.Error("(CheckForSPU2ConfigChanges) Failed to reopen SPU2, we'll probably crash :(");
-		return;
-	}
-
-	if (SPU2freeze(FreezeAction::Load, &fd) != 0)
-	{
-		Console.Error("(CheckForSPU2ConfigChanges) Failed to unfreeze SPU2");
-		return;
-	}
-}
-
-void VMManager::CheckForDEV9ConfigChanges(const Pcsx2Config& old_config)
-{
-	if (EmuConfig.DEV9 == old_config.DEV9)
-		return;
-
-	DEV9CheckChanges(old_config);
-}
-
-void VMManager::CheckForMemoryCardConfigChanges(const Pcsx2Config& old_config)
-{
-	bool changed = false;
-
-	for (size_t i = 0; i < std::size(EmuConfig.Mcd); i++)
-	{
-		if (EmuConfig.Mcd[i].Enabled != old_config.Mcd[i].Enabled ||
-			EmuConfig.Mcd[i].Filename != old_config.Mcd[i].Filename)
-		{
-			changed = true;
-			break;
-		}
-	}
-
-	changed |= (EmuConfig.McdEnableEjection != old_config.McdEnableEjection);
-	changed |= (EmuConfig.McdFolderAutoManage != old_config.McdFolderAutoManage);
-
-	if (!changed)
-		return;
-
-	Console.WriteLn("Updating memory card configuration");
-
-	FileMcd_EmuClose();
-	FileMcd_EmuOpen();
-
-	// force card eject when files change
-	for (u32 port = 0; port < 2; port++)
-	{
-		for (u32 slot = 0; slot < 4; slot++)
-		{
-			const uint index = FileMcd_ConvertToSlot(port, slot);
-			if (EmuConfig.Mcd[index].Enabled != old_config.Mcd[index].Enabled ||
-				EmuConfig.Mcd[index].Filename != old_config.Mcd[index].Filename)
-			{
-				Console.WriteLn("Replugging memory card %u (port %u slot %u) due to source change", index, port, slot);
-				SetForceMcdEjectTimeoutNow(port, slot);
-			}
-		}
-	}
-
-	// force reindexing, mc folder code is janky
-	std::string sioSerial;
-	{
-		std::unique_lock lock(s_info_mutex);
-		if (const GameDatabaseSchema::GameEntry* game = GameDatabase::findGame(s_game_serial))
-			sioSerial = game->memcardFiltersAsString();
-		if (sioSerial.empty())
-			sioSerial = s_game_serial;
-	}
-	sioSetGameSerial(sioSerial);
-}
-
-void VMManager::CheckForConfigChanges(const Pcsx2Config& old_config)
-{
-	CheckForCPUConfigChanges(old_config);
-	CheckForGSConfigChanges(old_config);
-	CheckForFramerateConfigChanges(old_config);
-	CheckForPatchConfigChanges(old_config);
-	CheckForSPU2ConfigChanges(old_config);
-	CheckForDEV9ConfigChanges(old_config);
-	CheckForMemoryCardConfigChanges(old_config);
-
-	if (EmuConfig.EnableCheats != old_config.EnableCheats ||
-		EmuConfig.EnableWideScreenPatches != old_config.EnableWideScreenPatches ||
-		EmuConfig.EnableNoInterlacingPatches != old_config.EnableNoInterlacingPatches)
-	{
-		VMManager::ReloadPatches(true, true);
-	}
-}
-
-void VMManager::ApplySettings()
-{
-	Console.WriteLn("Applying settings...");
-
-	// if we're running, ensure the threads are synced
-	const bool running = (s_state.load(std::memory_order_acquire) == VMState::Running);
-	if (running)
-	{
-		if (THREAD_VU1)
-			vu1Thread.WaitVU();
-		GetMTGS().WaitGS(false);
-	}
-
-	const Pcsx2Config old_config(EmuConfig);
-	LoadSettings();
-
-	if (HasValidVM())
-		CheckForConfigChanges(old_config);
-}
-
-bool VMManager::ReloadGameSettings()
-{
-	if (!UpdateGameSettingsLayer())
-		return false;
-
-	ApplySettings();
-	return true;
-}
 
 static void HotkeyAdjustTargetSpeed(double delta)
 {
@@ -1838,242 +2071,3 @@ DEFINE_HOTKEY_LOADSTATE_X(10, 10)
 #undef DEFINE_HOTKEY_LOADSTATE_X
 
 END_HOTKEY_LIST()
-
-#ifdef _WIN32
-
-#include "common/RedtapeWindows.h"
-
-static bool s_timer_resolution_increased = false;
-
-void VMManager::SetTimerResolutionIncreased(bool enabled)
-{
-	if (s_timer_resolution_increased == enabled)
-		return;
-
-	if (enabled)
-	{
-		s_timer_resolution_increased = (timeBeginPeriod(1) == TIMERR_NOERROR);
-	}
-	else if (s_timer_resolution_increased)
-	{
-		timeEndPeriod(1);
-		s_timer_resolution_increased = false;
-	}
-}
-
-#else
-
-void VMManager::SetTimerResolutionIncreased(bool enabled)
-{
-}
-
-#endif
-
-static std::vector<u32> s_processor_list;
-static std::once_flag s_processor_list_initialized;
-
-#if defined(__linux__) || defined(_WIN32)
-
-#include "cpuinfo.h"
-
-static u32 GetProcessorIdForProcessor(const cpuinfo_processor* proc)
-{
-#if defined(__linux__)
-	return static_cast<u32>(proc->linux_id);
-#elif defined(_WIN32)
-	return static_cast<u32>(proc->windows_processor_id);
-#else
-	return 0;
-#endif
-}
-
-static void InitializeCPUInfo()
-{
-	if (!cpuinfo_initialize())
-	{
-		Console.Error("Failed to initialize cpuinfo");
-		return;
-	}
-
-	const u32 cluster_count = cpuinfo_get_clusters_count();
-	if (cluster_count == 0)
-	{
-		Console.Error("Invalid CPU count returned");
-		return;
-	}
-
-	Console.WriteLn(Color_StrongYellow, "Processor count: %u cores, %u processors", cpuinfo_get_cores_count(), cpuinfo_get_processors_count());
-	Console.WriteLn(Color_StrongYellow, "Cluster count: %u", cluster_count);
-
-	static std::vector<const cpuinfo_processor*> ordered_processors;
-	for (u32 i = 0; i < cluster_count; i++)
-	{
-		const cpuinfo_cluster* cluster = cpuinfo_get_cluster(i);
-		for (u32 j = 0; j < cluster->processor_count; j++)
-		{
-			const cpuinfo_processor* proc = cpuinfo_get_processor(cluster->processor_start + j);
-			if (!proc)
-				continue;
-
-			ordered_processors.push_back(proc);
-		}
-	}
-	// find the large and small clusters based on frequency
-	// this is assuming the large cluster is always clocked higher
-	// sort based on core, so that hyperthreads get pushed down
-	std::sort(ordered_processors.begin(), ordered_processors.end(), [](const cpuinfo_processor* lhs, const cpuinfo_processor* rhs) {
-		return (lhs->core->frequency > rhs->core->frequency || lhs->smt_id < rhs->smt_id);
-	});
-
-	s_processor_list.reserve(ordered_processors.size());
-	std::stringstream ss;
-	ss << "Ordered processor list: ";
-	for (const cpuinfo_processor* proc : ordered_processors)
-	{
-		if (proc != ordered_processors.front())
-			ss << ", ";
-
-		const u32 procid = GetProcessorIdForProcessor(proc);
-		ss << procid;
-		if (proc->smt_id != 0)
-			ss << "[SMT " << proc->smt_id << "]";
-
-		s_processor_list.push_back(procid);
-	}
-	Console.WriteLn(ss.str());
-}
-
-static void SetMTVUAndAffinityControlDefault(Pcsx2Config& config)
-{
-	VMManager::EnsureCPUInfoInitialized();
-
-	const u32 cluster_count = cpuinfo_get_clusters_count();
-	if (cluster_count == 0)
-	{
-		Console.Error("Invalid CPU count returned");
-		return;
-	}
-
-	Console.WriteLn("Cluster count: %u", cluster_count);
-
-	for (u32 i = 0; i < cluster_count; i++)
-	{
-		const cpuinfo_cluster* cluster = cpuinfo_get_cluster(i);
-		Console.WriteLn("  Cluster %u: %u cores and %u processors at %u MHz",
-			i, cluster->core_count, cluster->processor_count, static_cast<u32>(cluster->frequency /* / 1000000u*/));
-	}
-
-	const bool has_big_little = cluster_count > 1;
-	Console.WriteLn("Big-Little: %s", has_big_little ? "yes" : "no");
-
-	const u32 big_cores = cpuinfo_get_cluster(0)->core_count + ((cluster_count > 2) ? cpuinfo_get_cluster(1)->core_count : 0u);
-	Console.WriteLn("Guessing we have %u big/medium cores...", big_cores);
-
-	bool mtvu_enable;
-	bool affinity_control;
-	if (big_cores >= 3 || big_cores == 1)
-	{
-		Console.WriteLn("  So enabling MTVU and disabling affinity control");
-		mtvu_enable = true;
-		affinity_control = false;
-	}
-	else
-	{
-		Console.WriteLn("  So disabling MTVU and enabling affinity control");
-		mtvu_enable = false;
-		affinity_control = true;
-	}
-
-	config.Speedhacks.vuThread = mtvu_enable;
-	config.Cpu.AffinityControlMode = affinity_control ? 1 : 0;
-}
-
-#else
-
-static void InitializeCPUInfo()
-{
-	DevCon.WriteLn("(VMManager) InitializeCPUInfo() not implemented.");
-}
-
-static void SetMTVUAndAffinityControlDefault(Pcsx2Config& config)
-{
-}
-
-#endif
-
-void VMManager::EnsureCPUInfoInitialized()
-{
-	std::call_once(s_processor_list_initialized, InitializeCPUInfo);
-}
-
-void VMManager::SetEmuThreadAffinities()
-{
-	EnsureCPUInfoInitialized();
-
-	if (s_processor_list.empty())
-	{
-		// not supported on this platform
-		return;
-	}
-
-	if (EmuConfig.Cpu.AffinityControlMode == 0 ||
-		s_processor_list.size() < (EmuConfig.Speedhacks.vuThread ? 3 : 2))
-	{
-		if (EmuConfig.Cpu.AffinityControlMode != 0)
-			Console.Error("Insufficient processors for affinity control.");
-
-		GetMTGS().GetThreadHandle().SetAffinity(0);
-		vu1Thread.GetThreadHandle().SetAffinity(0);
-		s_vm_thread_handle.SetAffinity(0);
-		return;
-	}
-
-	static constexpr u8 processor_assignment[7][2][3] = {
-		//EE xx GS  EE VU GS
-		{{0, 2, 1}, {0, 1, 2}}, // Disabled
-		{{0, 2, 1}, {0, 1, 2}}, // EE > VU > GS
-		{{0, 2, 1}, {0, 2, 1}}, // EE > GS > VU
-		{{0, 2, 1}, {1, 0, 2}}, // VU > EE > GS
-		{{1, 2, 0}, {2, 0, 1}}, // VU > GS > EE
-		{{1, 2, 0}, {1, 2, 0}}, // GS > EE > VU
-		{{1, 2, 0}, {2, 1, 0}}, // GS > VU > EE
-	};
-
-	// steal vu's thread if mtvu is off
-	const u8* this_proc_assigment = processor_assignment[EmuConfig.Cpu.AffinityControlMode][EmuConfig.Speedhacks.vuThread];
-	const u32 ee_index = s_processor_list[this_proc_assigment[0]];
-	const u32 vu_index = s_processor_list[this_proc_assigment[1]];
-	const u32 gs_index = s_processor_list[this_proc_assigment[2]];
-	Console.WriteLn("Processor order assignment: EE=%u, VU=%u, GS=%u",
-		this_proc_assigment[0], this_proc_assigment[1], this_proc_assigment[2]);
-
-	const u64 ee_affinity = static_cast<u64>(1) << ee_index;
-	Console.WriteLn(Color_StrongGreen, "EE thread is on processor %u (0x%llx)", ee_index, ee_affinity);
-	s_vm_thread_handle.SetAffinity(ee_affinity);
-
-	if (EmuConfig.Speedhacks.vuThread)
-	{
-		const u64 vu_affinity = static_cast<u64>(1) << vu_index;
-		Console.WriteLn(Color_StrongGreen, "VU thread is on processor %u (0x%llx)", vu_index, vu_affinity);
-		vu1Thread.GetThreadHandle().SetAffinity(vu_affinity);
-	}
-	else
-	{
-		vu1Thread.GetThreadHandle().SetAffinity(0);
-	}
-
-	const u64 gs_affinity = static_cast<u64>(1) << gs_index;
-	Console.WriteLn(Color_StrongGreen, "GS thread is on processor %u (0x%llx)", gs_index, gs_affinity);
-	GetMTGS().GetThreadHandle().SetAffinity(gs_affinity);
-}
-
-void VMManager::SetHardwareDependentDefaultSettings(Pcsx2Config& config)
-{
-	SetMTVUAndAffinityControlDefault(config);
-}
-
-const std::vector<u32>& VMManager::GetSortedProcessorList()
-{
-	EnsureCPUInfoInitialized();
-	return s_processor_list;
-}
