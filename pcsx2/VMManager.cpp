@@ -301,78 +301,7 @@ std::string GetInputProfilePath(const std::string_view& name)
 	return Path::Combine(EmuFolders::InputProfiles, fmt::format("{}.ini", name));
 }
 
-bool Internal::InitializeGlobals()
-{
-	// On Win32, we have a bunch of things which use COM (e.g. SDL, XAudio2, etc).
-	// We need to initialize COM first, before anything else does, because otherwise they might
-	// initialize it in single-threaded/apartment mode, which can't be changed to multithreaded.
-#ifdef _WIN32
-	HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-	if (FAILED(hr))
-	{
-		Host::ReportErrorAsync("Error", fmt::format("CoInitializeEx() failed: {:08X}", hr));
-		return false;
-	}
-#endif
-
-	x86caps.Identify();
-	x86caps.CountCores();
-	x86caps.SIMD_EstablishMXCSRmask();
-	x86caps.CalculateMHz();
-	SysLogMachineCaps();
-
-	return true;
-}
-
-void Internal::ReleaseGlobals()
-{
-#ifdef _WIN32
-	CoUninitialize();
-#endif
-}
-
-bool Internal::InitializeMemory()
-{
-	pxAssert(!s_vm_memory && !s_cpu_provider_pack);
-
-	s_vm_memory = std::make_unique<SysMainMemory>();
-	s_cpu_provider_pack = std::make_unique<SysCpuProviderPack>();
-
-	s_vm_memory->ReserveAll();
-	return true;
-}
-
-void Internal::ReleaseMemory()
-{
-	std::vector<u8>().swap(s_widescreen_cheats_data);
-	s_widescreen_cheats_loaded = false;
-	std::vector<u8>().swap(s_no_interlacing_cheats_data);
-	s_no_interlacing_cheats_loaded = false;
-
-	s_vm_memory->DecommitAll();
-	s_vm_memory->ReleaseAll();
-	s_vm_memory.reset();
-	s_cpu_provider_pack.reset();
-}
-
-}
-
-
-
-
-
-
-SysMainMemory& GetVmMemory()
-{
-	return *s_vm_memory;
-}
-
-SysCpuProviderPack& GetCpuProviders()
-{
-	return *s_cpu_provider_pack;
-}
-
-void VMManager::RequestDisplaySize(float scale /*= 0.0f*/)
+void RequestDisplaySize(float scale /*= 0.0f*/)
 {
 	int iwidth, iheight;
 	GSgetInternalResolution(&iwidth, &iheight);
@@ -418,7 +347,7 @@ void VMManager::RequestDisplaySize(float scale /*= 0.0f*/)
 	Host::RequestResizeHostDisplay(iwidth, iheight);
 }
 
-bool VMManager::UpdateGameSettingsLayer()
+bool UpdateGameSettingsLayer()
 {
 	std::unique_ptr<INISettingsInterface> new_interface;
 	if (s_game_crc != 0)
@@ -486,7 +415,7 @@ bool VMManager::UpdateGameSettingsLayer()
 	return true;
 }
 
-void VMManager::LoadPatches(const std::string& serial, u32 crc, bool show_messages, bool show_messages_when_disabled)
+void LoadPatches(const std::string& serial, u32 crc, bool show_messages, bool show_messages_when_disabled)
 {
 	const std::string crc_string(fmt::format("{:08X}", crc));
 	s_patches_crc = crc;
@@ -619,7 +548,7 @@ void VMManager::LoadPatches(const std::string& serial, u32 crc, bool show_messag
 	}
 }
 
-void VMManager::UpdateRunningGame(bool resetting, bool game_starting)
+void UpdateRunningGame(bool resetting, bool game_starting)
 {
 	// The CRC can be known before the game actually starts (at the bios), so when
 	// we have the CRC but we're still at the bios and the settings are changed
@@ -689,17 +618,12 @@ void VMManager::UpdateRunningGame(bool resetting, bool game_starting)
 #endif
 }
 
-void VMManager::ReloadPatches(bool verbose, bool show_messages_when_disabled)
+void ReloadPatches(bool verbose, bool show_messages_when_disabled)
 {
 	LoadPatches(s_game_serial, s_game_crc, verbose, show_messages_when_disabled);
 }
 
-static LimiterModeType GetInitialLimiterMode()
-{
-	return EmuConfig.GS.FrameLimitEnable ? LimiterModeType::Nominal : LimiterModeType::Unlimited;
-}
-
-bool VMManager::AutoDetectSource(const std::string& filename)
+bool AutoDetectSource(const std::string& filename)
 {
 	if (!filename.empty())
 	{
@@ -740,7 +664,7 @@ bool VMManager::AutoDetectSource(const std::string& filename)
 	}
 }
 
-bool VMManager::ApplyBootParameters(const VMBootParameters& params, std::string* state_to_load)
+bool ApplyBootParameters(const VMBootParameters& params, std::string* state_to_load)
 {
 	const bool default_fast_boot = Host::GetBoolSettingValue("EmuCore", "EnableFastBoot", true);
 	EmuConfig.UseBOOT2Injection = params.fast_boot.value_or(default_fast_boot);
@@ -803,7 +727,7 @@ bool VMManager::ApplyBootParameters(const VMBootParameters& params, std::string*
 	return true;
 }
 
-bool VMManager::CheckBIOSAvailability()
+bool CheckBIOSAvailability()
 {
 	if (IsBIOSAvailable(EmuConfig.FullpathToBios()))
 		return true;
@@ -819,7 +743,7 @@ bool VMManager::CheckBIOSAvailability()
 	return false;
 }
 
-bool VMManager::Initialize(const VMBootParameters& boot_params)
+bool Initialize(const VMBootParameters& boot_params)
 {
 	const Common::Timer init_timer;
 	pxAssertRel(s_state.load(std::memory_order_acquire) == VMState::Shutdown, "VM is shutdown");
@@ -980,7 +904,7 @@ bool VMManager::Initialize(const VMBootParameters& boot_params)
 	return true;
 }
 
-void VMManager::Shutdown(bool save_resume_state)
+void Shutdown(bool save_resume_state)
 {
 	// we'll probably already be stopping (this is how Qt calls shutdown),
 	// but just in case, so any of the stuff we call here knows we don't have a valid VM.
@@ -1050,7 +974,7 @@ void VMManager::Shutdown(bool save_resume_state)
 	Host::OnVMDestroyed();
 }
 
-void VMManager::Reset()
+void Reset()
 {
 	const bool game_was_started = g_GameStarted;
 
@@ -1070,7 +994,7 @@ void VMManager::Reset()
 		UpdateRunningGame(true, false);
 }
 
-std::string VMManager::GetSaveStateFileName(const char* game_serial, u32 game_crc, s32 slot)
+std::string GetSaveStateFileName(const char* game_serial, u32 game_crc, s32 slot)
 {
 	std::string filename;
 	if (game_crc != 0)
@@ -1086,7 +1010,7 @@ std::string VMManager::GetSaveStateFileName(const char* game_serial, u32 game_cr
 	return filename;
 }
 
-std::string VMManager::GetSaveStateFileName(const char* filename, s32 slot)
+std::string GetSaveStateFileName(const char* filename, s32 slot)
 {
 	pxAssertRel(!HasValidVM(), "Should not have a VM when calling the non-gamelist GetSaveStateFileName()");
 
@@ -1111,19 +1035,19 @@ std::string VMManager::GetSaveStateFileName(const char* filename, s32 slot)
 	return ret;
 }
 
-bool VMManager::HasSaveStateInSlot(const char* game_serial, u32 game_crc, s32 slot)
+bool HasSaveStateInSlot(const char* game_serial, u32 game_crc, s32 slot)
 {
 	std::string filename(GetSaveStateFileName(game_serial, game_crc, slot));
 	return (!filename.empty() && FileSystem::FileExists(filename.c_str()));
 }
 
-std::string VMManager::GetCurrentSaveStateFileName(s32 slot)
+std::string GetCurrentSaveStateFileName(s32 slot)
 {
 	std::unique_lock lock(s_info_mutex);
 	return GetSaveStateFileName(s_game_serial.c_str(), s_game_crc, slot);
 }
 
-bool VMManager::DoLoadState(const char* filename)
+bool DoLoadState(const char* filename)
 {
 	if (GSDumpReplayer::IsReplayingDump())
 		return false;
@@ -1151,7 +1075,7 @@ bool VMManager::DoLoadState(const char* filename)
 	}
 }
 
-bool VMManager::DoSaveState(const char* filename, s32 slot_for_message, bool zip_on_thread)
+bool DoSaveState(const char* filename, s32 slot_for_message, bool zip_on_thread)
 {
 	if (GSDumpReplayer::IsReplayingDump())
 		return false;
@@ -1186,7 +1110,7 @@ bool VMManager::DoSaveState(const char* filename, s32 slot_for_message, bool zip
 	}
 }
 
-void VMManager::ZipSaveState(std::unique_ptr<ArchiveEntryList> elist,
+void ZipSaveState(std::unique_ptr<ArchiveEntryList> elist,
 	std::unique_ptr<SaveStateScreenshotData> screenshot, std::string osd_key,
 	const char* filename, s32 slot_for_message)
 {
@@ -1207,7 +1131,7 @@ void VMManager::ZipSaveState(std::unique_ptr<ArchiveEntryList> elist,
 	Host::InvalidateSaveStateCache();
 }
 
-void VMManager::ZipSaveStateOnThread(std::unique_ptr<ArchiveEntryList> elist, std::unique_ptr<SaveStateScreenshotData> screenshot,
+void ZipSaveStateOnThread(std::unique_ptr<ArchiveEntryList> elist, std::unique_ptr<SaveStateScreenshotData> screenshot,
 	std::string osd_key, std::string filename, s32 slot_for_message)
 {
 	ZipSaveState(std::move(elist), std::move(screenshot), std::move(osd_key), filename.c_str(), slot_for_message);
@@ -1226,7 +1150,7 @@ void VMManager::ZipSaveStateOnThread(std::unique_ptr<ArchiveEntryList> elist, st
 	}
 }
 
-void VMManager::WaitForSaveStateFlush()
+void WaitForSaveStateFlush()
 {
 	std::unique_lock lock(s_save_state_threads_mutex);
 	while (!s_save_state_threads.empty())
@@ -1241,7 +1165,7 @@ void VMManager::WaitForSaveStateFlush()
 	}
 }
 
-bool VMManager::LoadState(const char* filename)
+bool LoadState(const char* filename)
 {
 	// TODO: Save the current state so we don't need to reset.
 	if (DoLoadState(filename))
@@ -1251,7 +1175,7 @@ bool VMManager::LoadState(const char* filename)
 	return false;
 }
 
-bool VMManager::LoadStateFromSlot(s32 slot)
+bool LoadStateFromSlot(s32 slot)
 {
 	const std::string filename(GetCurrentSaveStateFileName(slot));
 	if (filename.empty())
@@ -1264,12 +1188,12 @@ bool VMManager::LoadStateFromSlot(s32 slot)
 	return DoLoadState(filename.c_str());
 }
 
-bool VMManager::SaveState(const char* filename, bool zip_on_thread)
+bool SaveState(const char* filename, bool zip_on_thread)
 {
 	return DoSaveState(filename, -1, zip_on_thread);
 }
 
-bool VMManager::SaveStateToSlot(s32 slot, bool zip_on_thread)
+bool SaveStateToSlot(s32 slot, bool zip_on_thread)
 {
 	const std::string filename(GetCurrentSaveStateFileName(slot));
 	if (filename.empty())
@@ -1280,12 +1204,12 @@ bool VMManager::SaveStateToSlot(s32 slot, bool zip_on_thread)
 	return DoSaveState(filename.c_str(), slot, zip_on_thread);
 }
 
-LimiterModeType VMManager::GetLimiterMode()
+LimiterModeType GetLimiterMode()
 {
 	return EmuConfig.LimiterMode;
 }
 
-void VMManager::SetLimiterMode(LimiterModeType type)
+void SetLimiterMode(LimiterModeType type)
 {
 	if (EmuConfig.LimiterMode == type)
 		return;
@@ -1295,7 +1219,7 @@ void VMManager::SetLimiterMode(LimiterModeType type)
 	GetMTGS().SetVSync(EmuConfig.GetEffectiveVsyncMode());
 }
 
-void VMManager::FrameAdvance(u32 num_frames /*= 1*/)
+void FrameAdvance(u32 num_frames /*= 1*/)
 {
 	if (!HasValidVM())
 		return;
@@ -1304,7 +1228,7 @@ void VMManager::FrameAdvance(u32 num_frames /*= 1*/)
 	SetState(VMState::Running);
 }
 
-bool VMManager::ChangeDisc(CDVD_SourceType source, std::string path)
+bool ChangeDisc(CDVD_SourceType source, std::string path)
 {
 	const CDVD_SourceType old_type = CDVDsys_GetSourceType();
 	const std::string old_path(CDVDsys_GetFile(old_type));
@@ -1340,34 +1264,34 @@ bool VMManager::ChangeDisc(CDVD_SourceType source, std::string path)
 	return result;
 }
 
-bool VMManager::IsElfFileName(const std::string_view& path)
+bool IsElfFileName(const std::string_view& path)
 {
 	return StringUtil::EndsWithNoCase(path, ".elf");
 }
 
-bool VMManager::IsBlockDumpFileName(const std::string_view& path)
+bool IsBlockDumpFileName(const std::string_view& path)
 {
 	return StringUtil::EndsWithNoCase(path, ".dump");
 }
 
-bool VMManager::IsGSDumpFileName(const std::string_view& path)
+bool IsGSDumpFileName(const std::string_view& path)
 {
 	return (StringUtil::EndsWithNoCase(path, ".gs") ||
 			StringUtil::EndsWithNoCase(path, ".gs.xz") ||
 			StringUtil::EndsWithNoCase(path, ".gs.zst"));
 }
 
-bool VMManager::IsSaveStateFileName(const std::string_view& path)
+bool IsSaveStateFileName(const std::string_view& path)
 {
 	return StringUtil::EndsWithNoCase(path, ".p2s");
 }
 
-bool VMManager::IsLoadableFileName(const std::string_view& path)
+bool IsLoadableFileName(const std::string_view& path)
 {
 	return IsElfFileName(path) || IsGSDumpFileName(path) || IsBlockDumpFileName(path) || GameList::IsScannableFilename(path);
 }
 
-void VMManager::Execute()
+void Execute()
 {
 	// Check for interpreter<->recompiler switches.
 	if (std::exchange(s_cpu_implementation_changed, false))
@@ -1381,7 +1305,7 @@ void VMManager::Execute()
 	Cpu->Execute();
 }
 
-void VMManager::SetPaused(bool paused)
+void SetPaused(bool paused)
 {
 	if (!HasValidVM())
 		return;
@@ -1389,6 +1313,85 @@ void VMManager::SetPaused(bool paused)
 	Console.WriteLn(paused ? "(VMManager) Pausing..." : "(VMManager) Resuming...");
 	SetState(paused ? VMState::Paused : VMState::Running);
 }
+
+bool Internal::InitializeGlobals()
+{
+	// On Win32, we have a bunch of things which use COM (e.g. SDL, XAudio2, etc).
+	// We need to initialize COM first, before anything else does, because otherwise they might
+	// initialize it in single-threaded/apartment mode, which can't be changed to multithreaded.
+#ifdef _WIN32
+	HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+	if (FAILED(hr))
+	{
+		Host::ReportErrorAsync("Error", fmt::format("CoInitializeEx() failed: {:08X}", hr));
+		return false;
+	}
+#endif
+
+	x86caps.Identify();
+	x86caps.CountCores();
+	x86caps.SIMD_EstablishMXCSRmask();
+	x86caps.CalculateMHz();
+	SysLogMachineCaps();
+
+	return true;
+}
+
+void Internal::ReleaseGlobals()
+{
+#ifdef _WIN32
+	CoUninitialize();
+#endif
+}
+
+bool Internal::InitializeMemory()
+{
+	pxAssert(!s_vm_memory && !s_cpu_provider_pack);
+
+	s_vm_memory = std::make_unique<SysMainMemory>();
+	s_cpu_provider_pack = std::make_unique<SysCpuProviderPack>();
+
+	s_vm_memory->ReserveAll();
+	return true;
+}
+
+void Internal::ReleaseMemory()
+{
+	std::vector<u8>().swap(s_widescreen_cheats_data);
+	s_widescreen_cheats_loaded = false;
+	std::vector<u8>().swap(s_no_interlacing_cheats_data);
+	s_no_interlacing_cheats_loaded = false;
+
+	s_vm_memory->DecommitAll();
+	s_vm_memory->ReleaseAll();
+	s_vm_memory.reset();
+	s_cpu_provider_pack.reset();
+}
+
+}
+
+SysMainMemory& GetVmMemory()
+{
+	return *s_vm_memory;
+}
+
+SysCpuProviderPack& GetCpuProviders()
+{
+	return *s_cpu_provider_pack;
+}
+
+
+
+
+
+
+
+static LimiterModeType GetInitialLimiterMode()
+{
+	return EmuConfig.GS.FrameLimitEnable ? LimiterModeType::Nominal : LimiterModeType::Unlimited;
+}
+
+
 
 const std::string& VMManager::Internal::GetElfOverride()
 {
