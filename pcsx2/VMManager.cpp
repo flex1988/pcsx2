@@ -136,7 +136,10 @@ static u32 s_frame_advance_count = 0;
 static u32 s_mxcsr_saved;
 static std::optional<LimiterModeType> s_limiter_mode_prior_to_hold_interaction;
 
-bool VMManager::PerformEarlyHardwareChecks(const char** error)
+namespace VMManager
+{
+
+bool PerformEarlyHardwareChecks(const char** error)
 {
 #define COMMON_DOWNLOAD_MESSAGE \
 	"PCSX2 builds can be downloaded from https://pcsx2.net/downloads/"
@@ -168,12 +171,12 @@ bool VMManager::PerformEarlyHardwareChecks(const char** error)
 	return true;
 }
 
-VMState VMManager::GetState()
+VMState GetState()
 {
 	return s_state.load(std::memory_order_acquire);
 }
 
-void VMManager::SetState(VMState state)
+void SetState(VMState state)
 {
 	// Some state transitions aren't valid.
 	const VMState old_state = s_state.load(std::memory_order_acquire);
@@ -203,6 +206,9 @@ void VMManager::SetState(VMState state)
 			Host::OnVMResumed();
 	}
 }
+
+}
+
 
 bool VMManager::HasValidVM()
 {
