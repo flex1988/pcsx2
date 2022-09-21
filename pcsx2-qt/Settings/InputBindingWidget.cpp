@@ -18,6 +18,7 @@
 #include <QtCore/QTimer>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
+#include <QtGui/QWheelEvent>
 #include <QtWidgets/QInputDialog>
 #include <QtWidgets/QMessageBox>
 #include <cmath>
@@ -27,7 +28,6 @@
 
 #include "pcsx2/GS/GSIntrin.h" // _BitScanForward
 
-#include "EmuThread.h"
 #include "QtHost.h"
 #include "QtUtils.h"
 #include "Settings/ControllerSettingsDialog.h"
@@ -131,6 +131,33 @@ bool InputBindingWidget::eventFilter(QObject* watched, QEvent* event)
 			m_new_bindings.push_back(InputManager::MakePointerButtonKey(0, button_index));
 		return true;
 	}
+	else if (event_type == QEvent::Wheel)
+	{
+		const QPoint delta_angle(static_cast<QWheelEvent*>(event)->angleDelta());
+		const float dx = std::clamp(static_cast<float>(delta_angle.x()) / QtUtils::MOUSE_WHEEL_DELTA, -1.0f, 1.0f);
+		if (dx != 0.0f)
+		{
+			InputBindingKey key(InputManager::MakePointerAxisKey(0, InputPointerAxis::WheelX));
+			key.negative = (dx < 0.0f);
+			m_new_bindings.push_back(key);
+		}
+
+		const float dy = std::clamp(static_cast<float>(delta_angle.y()) / QtUtils::MOUSE_WHEEL_DELTA, -1.0f, 1.0f);
+		if (dy != 0.0f)
+		{
+			InputBindingKey key(InputManager::MakePointerAxisKey(0, InputPointerAxis::WheelY));
+			key.negative = (dy < 0.0f);
+			m_new_bindings.push_back(key);
+		}
+
+		if (dx != 0.0f || dy != 0.0f)
+		{
+			setNewBinding();
+			stopListeningForInput();
+		}
+
+		return true;
+	}
 	else if (event_type == QEvent::MouseMove && m_mouse_mapping_enabled)
 	{
 		// if we've moved more than a decent distance from the center of the widget, bind it.
@@ -208,7 +235,8 @@ void InputBindingWidget::setNewBinding()
 		}
 		else
 		{
-			QtHost::SetBaseStringSettingValue(m_section_name.c_str(), m_key_name.c_str(), new_binding.c_str());
+			Host::SetBaseStringSettingValue(m_section_name.c_str(), m_key_name.c_str(), new_binding.c_str());
+			Host::CommitBaseSettingChanges();
 			g_emu_thread->reloadInputBindings();
 		}
 	}
@@ -228,7 +256,8 @@ void InputBindingWidget::clearBinding()
 	}
 	else
 	{
-		QtHost::RemoveBaseSettingValue(m_section_name.c_str(), m_key_name.c_str());
+		Host::RemoveBaseSettingValue(m_section_name.c_str(), m_key_name.c_str());
+		Host::CommitBaseSettingChanges();
 		g_emu_thread->reloadInputBindings();
 	}
 	reloadBinding();
@@ -385,7 +414,8 @@ void InputVibrationBindingWidget::setKey(ControllerSettingsDialog* dialog, std::
 void InputVibrationBindingWidget::clearBinding()
 {
 	m_binding = {};
-	QtHost::RemoveBaseSettingValue(m_section_name.c_str(), m_key_name.c_str());
+	Host::RemoveBaseSettingValue(m_section_name.c_str(), m_key_name.c_str());
+	Host::CommitBaseSettingChanges();
 	g_emu_thread->reloadInputBindings();
 	setText(QString());
 }
@@ -420,7 +450,8 @@ void InputVibrationBindingWidget::onClicked()
 
 	const QString new_value(input_dialog.textValue());
 	m_binding = new_value.toStdString();
-	QtHost::SetBaseStringSettingValue(m_section_name.c_str(), m_key_name.c_str(), m_binding.c_str());
+	Host::SetBaseStringSettingValue(m_section_name.c_str(), m_key_name.c_str(), m_binding.c_str());
+	Host::CommitBaseSettingChanges();
 	setText(new_value);
 }
 

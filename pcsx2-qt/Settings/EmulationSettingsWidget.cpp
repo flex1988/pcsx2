@@ -51,6 +51,7 @@ EmulationSettingsWidget::EmulationSettingsWidget(SettingsDialog* dialog, QWidget
 	SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.noInterlacingPatches, "EmuCore", "EnableNoInterlacingPatches", false);
 	SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.perGameSettings, "EmuCore", "EnablePerGameSettings", true);
 	SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.hostFilesystem, "EmuCore", "HostFs", false);
+	SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.warnAboutUnsafeSettings, "EmuCore", "WarnAboutUnsafeSettings", true);
 
 	dialog->registerWidgetHelp(m_ui.normalSpeed, tr("Normal Speed"), "100%",
 		tr("Sets the target emulation speed. It is not guaranteed that this speed will be reached, "
@@ -60,17 +61,23 @@ EmulationSettingsWidget::EmulationSettingsWidget(SettingsDialog* dialog, QWidget
 		tr("Sets the fast forward speed. This speed will be used when the fast forward hotkey is pressed/toggled."));
 
 	dialog->registerWidgetHelp(m_ui.slowMotionSpeed, tr("Slow Motion Speed"), tr("User Preference"),
-		tr("Sets the slow motion speed. This speed will be used when the slow motion hotkey is pressed/toggled."));
+		tr("Sets the slow motion speed. This speed will be used when the slow motion hotkey is pressed/toggled."));	
 
-	dialog->registerWidgetHelp(m_ui.syncToHostRefreshRate, tr("Sync To Host Refresh Rate"), tr("Unchecked"),
+	dialog->registerWidgetHelp(m_ui.speedLimiter, tr("Speed Limiter"), tr("Checked"),
+		tr("Limits the emulation to the appropriate framerate for the currently running game."));
+
+	dialog->registerWidgetHelp(m_ui.syncToHostRefreshRate, tr("Scale To Host Refresh Rate"), tr("Unchecked"),
 		tr("Adjusts the emulation speed so the console's refresh rate matches the host's refresh rate when both VSync and "
 		   "Audio Resampling settings are enabled. This results in the smoothest animations possible, at the cost of "
-		   "potentially increasing the emulation speed by less than 1%. Sync To Host Refresh Rate will not take effect if "
+		   "potentially increasing the emulation speed by less than 1%. Scale To Host Refresh Rate will not take effect if "
 		   "the console's refresh rate is too far from the host's refresh rate. Users with variable refresh rate displays "
 		   "should disable this option."));
 
 	dialog->registerWidgetHelp(m_ui.cheats, tr("Enable Cheats"), tr("Unchecked"),
 		tr("Automatically loads and applies cheats on game start."));
+	
+	dialog->registerWidgetHelp(m_ui.hostFilesystem, tr("Enable Host Filesystem"), tr("Unchecked"),
+		tr("Allows games and homebrew to access files / folders directly on the host computer."));
 
 	dialog->registerWidgetHelp(m_ui.widescreenPatches, tr("Enable Widescreen Patches"), tr("Unchecked"),
 		tr("Automatically loads and applies widescreen patches on game start. Can cause issues."));
@@ -89,6 +96,9 @@ EmulationSettingsWidget::EmulationSettingsWidget(SettingsDialog* dialog, QWidget
 	dialog->registerWidgetHelp(m_ui.maxFrameLatency, tr("Maximum Frame Latency"), tr("2 Frames"),
 		tr("Sets the maximum number of frames that can be queued up to the GS, before the CPU thread will wait for one of them to complete before continuing. "
 		   "Higher values can assist with smoothing out irregular frame times, but add additional input lag."));
+
+	dialog->registerWidgetHelp(m_ui.warnAboutUnsafeSettings, tr("Warn About Unsafe Settings"),
+		tr("Checked"), tr("Displays warnings when settings are enabled which may break games."));
 
 	updateOptimalFramePacing();
 }

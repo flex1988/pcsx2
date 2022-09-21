@@ -23,7 +23,7 @@
 #include "Config.h"
 #include "GS.h"
 #include "HostDisplay.h"
-#include "CDVD/CDVDaccess.h"
+#include "CDVD/CDVDcommon.h"
 #include "MemoryCardFile.h"
 
 #ifndef PCSX2_CORE
@@ -323,14 +323,11 @@ Pcsx2Config::GSOptions::GSOptions()
 	OsdShowIndicators = true;
 
 	HWDisableReadbacks = false;
-	AccurateDATE = true;
 	GPUPaletteConversion = false;
-	ConservativeFramebuffer = true;
 	AutoFlushSW = true;
 	PreloadFrameWithGSData = false;
 	WrapGSMem = false;
 	Mipmap = true;
-	AA1 = true;
 	PointListPalette = false;
 
 	ManualUserHacks = false;
@@ -385,8 +382,16 @@ bool Pcsx2Config::GSOptions::OptionsAreEqual(const GSOptions& right) const
 
 		OpEqu(Zoom) &&
 		OpEqu(StretchY) &&
+#ifndef PCSX2_CORE
 		OpEqu(OffsetX) &&
 		OpEqu(OffsetY) &&
+#else
+		OpEqu(Crop[0]) &&
+		OpEqu(Crop[1]) &&
+		OpEqu(Crop[2]) &&
+		OpEqu(Crop[3]) &&
+#endif
+
 		OpEqu(OsdScale) &&
 
 		OpEqu(Renderer) &&
@@ -469,8 +474,10 @@ void Pcsx2Config::GSOptions::LoadSave(SettingsWrapper& wrap)
 
 	SettingsWrapEntry(Zoom);
 	SettingsWrapEntry(StretchY);
-	SettingsWrapEntry(OffsetX);
-	SettingsWrapEntry(OffsetY);
+	SettingsWrapEntryEx(Crop[0], "CropLeft");
+	SettingsWrapEntryEx(Crop[1], "CropTop");
+	SettingsWrapEntryEx(Crop[2], "CropRight");
+	SettingsWrapEntryEx(Crop[3], "CropBottom");
 #endif
 
 #ifndef PCSX2_CORE
@@ -504,7 +511,7 @@ void Pcsx2Config::GSOptions::ReloadIniSettings()
 #define GSSettingIntEx(var, name) var = theApp.GetConfigI(name)
 #define GSSettingBool(var) var = theApp.GetConfigB(#var)
 #define GSSettingBoolEx(var, name) var = theApp.GetConfigB(name)
-#define GSSettingFloat(var) var = static_cast<double>(theApp.GetConfigI(#var))
+#define GSSettingFloat(var) var = static_cast<float>(theApp.GetConfigI(#var))
 #define GSSettingIntEnumEx(var, name) var = static_cast<decltype(var)>(theApp.GetConfigI(name))
 #define GSSettingString(var) var = theApp.GetConfigS(#var)
 #define GSSettingStringEx(var, name) var = theApp.GetConfigS(name)
@@ -535,14 +542,11 @@ void Pcsx2Config::GSOptions::ReloadIniSettings()
 	GSSettingBool(OsdShowIndicators);
 
 	GSSettingBool(HWDisableReadbacks);
-	GSSettingBoolEx(AccurateDATE, "accurate_date");
 	GSSettingBoolEx(GPUPaletteConversion, "paltex");
-	GSSettingBoolEx(ConservativeFramebuffer, "conservative_framebuffer");
 	GSSettingBoolEx(AutoFlushSW, "autoflush_sw");
 	GSSettingBoolEx(PreloadFrameWithGSData, "preload_frame_with_gs_data");
 	GSSettingBoolEx(WrapGSMem, "wrap_gs_mem");
 	GSSettingBoolEx(Mipmap, "mipmap");
-	GSSettingBoolEx(AA1, "aa1");
 	GSSettingBoolEx(ManualUserHacks, "UserHacks");
 	GSSettingBoolEx(UserHacks_AlignSpriteX, "UserHacks_align_sprite_X");
 	GSSettingBoolEx(UserHacks_AutoFlush, "UserHacks_AutoFlush");
@@ -676,7 +680,7 @@ bool Pcsx2Config::GSOptions::UseHardwareRenderer() const
 
 VsyncMode Pcsx2Config::GetEffectiveVsyncMode() const
 {
-	if (GS.LimitScalar != 1.0)
+	if (GS.LimitScalar != 1.0f)
 	{
 		Console.WriteLn("Vsync is OFF");
 		return VsyncMode::Off;
@@ -716,6 +720,7 @@ void Pcsx2Config::SPU2Options::LoadSave(SettingsWrapper& wrap)
 		SettingsWrapEntry(Latency);
 		SynchMode = static_cast<SynchronizationMode>(wrap.EntryBitfield(CURRENT_SETTINGS_SECTION, "SynchMode", static_cast<int>(SynchMode), static_cast<int>(SynchMode)));
 		SettingsWrapEntry(SpeakerConfiguration);
+		SettingsWrapEntry(DplDecodingLevel);
 	}
 }
 
@@ -997,9 +1002,9 @@ void Pcsx2Config::FramerateOptions::SanityCheck()
 {
 	// Ensure Conformation of various options...
 
-	NominalScalar = std::clamp(NominalScalar, 0.05, 10.0);
-	TurboScalar = std::clamp(TurboScalar, 0.05, 10.0);
-	SlomoScalar = std::clamp(SlomoScalar, 0.05, 10.0);
+	NominalScalar = std::clamp(NominalScalar, 0.05f, 10.0f);
+	TurboScalar = std::clamp(TurboScalar, 0.05f, 10.0f);
+	SlomoScalar = std::clamp(SlomoScalar, 0.05f, 10.0f);
 }
 
 void Pcsx2Config::FramerateOptions::LoadSave(SettingsWrapper& wrap)
@@ -1029,6 +1034,8 @@ Pcsx2Config::Pcsx2Config()
 	McdCompressNTFS = true;
 #endif
 
+	WarnAboutUnsafeSettings = true;
+
 	// To be moved to FileMemoryCard pluign (someday)
 	for (uint slot = 0; slot < 8; ++slot)
 	{
@@ -1044,6 +1051,11 @@ Pcsx2Config::Pcsx2Config()
 
 void Pcsx2Config::LoadSave(SettingsWrapper& wrap)
 {
+	// Switch the rounding mode back to the system default for loading settings.
+	// That way, we'll get exactly the same values as what we loaded when we first started.
+	const SSE_MXCSR prev_mxcsr(SSE_MXCSR::GetCurrent());
+	SSE_MXCSR::SetCurrent(SSE_MXCSR{SYSTEM_sseMXCSR});
+
 	SettingsWrapSection("EmuCore");
 
 	SettingsWrapBitBool(CdvdVerboseReads);
@@ -1061,8 +1073,6 @@ void Pcsx2Config::LoadSave(SettingsWrapper& wrap)
 #endif
 	SettingsWrapBitBool(ConsoleToStdio);
 	SettingsWrapBitBool(HostFs);
-	SettingsWrapBitBool(PatchBios);
-	SettingsWrapEntry(PatchRegion);
 
 	SettingsWrapBitBool(BackupSavestate);
 	SettingsWrapBitBool(SavestateZstdCompression);
@@ -1073,6 +1083,8 @@ void Pcsx2Config::LoadSave(SettingsWrapper& wrap)
 	SettingsWrapBitBool(MultitapPort0_Enabled);
 	SettingsWrapBitBool(MultitapPort1_Enabled);
 #endif
+
+	SettingsWrapBitBool(WarnAboutUnsafeSettings);
 
 	// Process various sub-components:
 
@@ -1109,6 +1121,8 @@ void Pcsx2Config::LoadSave(SettingsWrapper& wrap)
 	{
 		CurrentAspectRatio = GS.AspectRatio;
 	}
+
+	SSE_MXCSR::SetCurrent(prev_mxcsr);
 }
 
 void Pcsx2Config::LoadSaveMemcards(SettingsWrapper& wrap)
@@ -1209,8 +1223,6 @@ void Pcsx2Config::CopyConfig(const Pcsx2Config& cfg)
 	EnableNoInterlacingPatches = cfg.EnableNoInterlacingPatches;
 	EnableRecordingTools = cfg.EnableRecordingTools;
 	UseBOOT2Injection = cfg.UseBOOT2Injection;
-	PatchBios = cfg.PatchBios;
-	PatchRegion = cfg.PatchRegion;
 	BackupSavestate = cfg.BackupSavestate;
 	SavestateZstdCompression = cfg.SavestateZstdCompression;
 	McdEnableEjection = cfg.McdEnableEjection;
@@ -1226,21 +1238,35 @@ void Pcsx2Config::CopyConfig(const Pcsx2Config& cfg)
 	LimiterMode = cfg.LimiterMode;
 }
 
-void EmuFolders::SetDefaults()
+void Pcsx2Config::CopyRuntimeConfig(Pcsx2Config& cfg)
 {
-	Bios = Path::Combine(DataRoot, "bios");
-	Snapshots = Path::Combine(DataRoot, "snaps");
-	Savestates = Path::Combine(DataRoot, "sstates");
-	MemoryCards = Path::Combine(DataRoot, "memcards");
-	Logs = Path::Combine(DataRoot, "logs");
-	Cheats = Path::Combine(DataRoot, "cheats");
-	CheatsWS = Path::Combine(DataRoot, "cheats_ws");
-	CheatsNI = Path::Combine(DataRoot, "cheats_ni");
-	Covers = Path::Combine(DataRoot, "covers");
-	GameSettings = Path::Combine(DataRoot, "gamesettings");
-	Cache = Path::Combine(DataRoot, "cache");
-	Textures = Path::Combine(DataRoot, "textures");
-	InputProfiles = Path::Combine(DataRoot, "inputprofiles");
+	GS.LimitScalar = cfg.GS.LimitScalar;
+	UseBOOT2Injection = cfg.UseBOOT2Injection;
+	CurrentBlockdump = std::move(cfg.CurrentBlockdump);
+	CurrentIRX = std::move(cfg.CurrentIRX);
+	CurrentGameArgs = std::move(cfg.CurrentGameArgs);
+	CurrentAspectRatio = cfg.CurrentAspectRatio;
+	LimiterMode = cfg.LimiterMode;
+
+	for (u32 i = 0; i < sizeof(Mcd) / sizeof(Mcd[0]); i++)
+	{
+		Mcd[i].Type = cfg.Mcd[i].Type;
+	}
+}
+
+void EmuFolders::SetDefaults(SettingsInterface& si)
+{
+	si.SetStringValue("Folders", "Bios", "bios");
+	si.SetStringValue("Folders", "Snapshots", "snaps");
+	si.SetStringValue("Folders", "Savestates", "sstates");
+	si.SetStringValue("Folders", "MemoryCards", "memcards");
+	si.SetStringValue("Folders", "Logs", "logs");
+	si.SetStringValue("Folders", "Cheats", "cheats");
+	si.SetStringValue("Folders", "CheatsWS", "cheats_ws");
+	si.SetStringValue("Folders", "CheatsNI", "cheats_ni");
+	si.SetStringValue("Folders", "Cache", "cache");
+	si.SetStringValue("Folders", "Textures", "textures");
+	si.SetStringValue("Folders", "InputProfiles", "inputprofiles");
 }
 
 static std::string LoadPathFromSettings(SettingsInterface& si, const std::string& root, const char* name, const char* def)
@@ -1280,22 +1306,6 @@ void EmuFolders::LoadConfig(SettingsInterface& si)
 	Console.WriteLn("Cache Directory: %s", Cache.c_str());
 	Console.WriteLn("Textures Directory: %s", Textures.c_str());
 	Console.WriteLn("Input Profile Directory: %s", InputProfiles.c_str());
-}
-
-void EmuFolders::Save(SettingsInterface& si)
-{
-	// convert back to relative
-	si.SetStringValue("Folders", "Bios", Path::MakeRelative(Bios, DataRoot).c_str());
-	si.SetStringValue("Folders", "Snapshots", Path::MakeRelative(Snapshots, DataRoot).c_str());
-	si.SetStringValue("Folders", "Savestates", Path::MakeRelative(Savestates, DataRoot).c_str());
-	si.SetStringValue("Folders", "MemoryCards", Path::MakeRelative(MemoryCards, DataRoot).c_str());
-	si.SetStringValue("Folders", "Logs", Path::MakeRelative(Logs, DataRoot).c_str());
-	si.SetStringValue("Folders", "Cheats", Path::MakeRelative(Cheats, DataRoot).c_str());
-	si.SetStringValue("Folders", "CheatsWS", Path::MakeRelative(CheatsWS, DataRoot).c_str());
-	si.SetStringValue("Folders", "CheatsNI", Path::MakeRelative(CheatsNI, DataRoot).c_str());
-	si.SetStringValue("Folders", "Cache", Path::MakeRelative(Cache, DataRoot).c_str());
-	si.SetStringValue("Folders", "Textures", Path::MakeRelative(Textures, DataRoot).c_str());
-	si.SetStringValue("Folders", "InputProfiles", Path::MakeRelative(InputProfiles, DataRoot).c_str());
 }
 
 bool EmuFolders::EnsureFoldersExist()

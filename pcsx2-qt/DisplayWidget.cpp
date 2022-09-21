@@ -17,8 +17,9 @@
 
 #include "common/Assertions.h"
 
+#include "pcsx2/Frontend/ImGuiManager.h"
+
 #include "DisplayWidget.h"
-#include "EmuThread.h"
 #include "MainWindow.h"
 #include "QtHost.h"
 #include "QtUtils.h"
@@ -181,6 +182,24 @@ void DisplayWidget::updateCursor(bool master_enable)
 		unsetCursor();
 }
 
+void DisplayWidget::handleCloseEvent(QCloseEvent* event)
+{
+	// Closing the separate widget will either cancel the close, or trigger shutdown.
+	// In the latter case, it's going to destroy us, so don't let Qt do it first.
+	if (QtHost::IsVMValid())
+	{
+		QMetaObject::invokeMethod(g_main_window, "requestShutdown", Q_ARG(bool, true),
+			Q_ARG(bool, true), Q_ARG(bool, false));
+	}
+	else
+	{
+		QMetaObject::invokeMethod(g_main_window, &MainWindow::requestExit);
+	}
+
+	// Cancel the event from closing the window.
+	event->ignore();
+}
+
 void DisplayWidget::updateCenterPos()
 {
 #ifdef _WIN32
@@ -224,6 +243,18 @@ bool DisplayWidget::event(QEvent* event)
 		case QEvent::KeyRelease:
 		{
 			const QKeyEvent* key_event = static_cast<QKeyEvent*>(event);
+			
+			// Forward text input to imgui.
+			if (ImGuiManager::WantsTextInput() && key_event->type() == QEvent::KeyPress)
+			{
+				// Don't forward backspace characters. We send the backspace as a normal key event,
+				// so if we send the character too, it double-deletes.
+				QString text(key_event->text());
+				text.remove(QChar('\b'));
+				if (!text.isEmpty())
+					ImGuiManager::AddTextInput(text.toStdString());
+			}
+
 			if (key_event->isAutoRepeat())
 				return true;
 
@@ -319,6 +350,7 @@ bool DisplayWidget::event(QEvent* event)
 			// don't toggle fullscreen when we're bound.. that wouldn't end well.
 			if (event->type() == QEvent::MouseButtonDblClick &&
 				static_cast<const QMouseEvent*>(event)->button() == Qt::LeftButton &&
+				QtHost::IsVMValid() && !QtHost::IsVMPaused() &&
 				!InputManager::HasAnyBindingsForKey(InputManager::MakePointerButtonKey(0, 0)) &&
 				Host::GetBoolSettingValue("UI", "DoubleClickTogglesFullscreen", true))
 			{
@@ -330,15 +362,12 @@ bool DisplayWidget::event(QEvent* event)
 
 		case QEvent::Wheel:
 		{
-			// wheel delta is 120 as in winapi
 			const QPoint delta_angle(static_cast<QWheelEvent*>(event)->angleDelta());
-			constexpr float DELTA = 120.0f;
-
-			const float dx = std::clamp(static_cast<float>(delta_angle.x()) / DELTA, -1.0f, 1.0f);
+			const float dx = std::clamp(static_cast<float>(delta_angle.x()) / QtUtils::MOUSE_WHEEL_DELTA, -1.0f, 1.0f);
 			if (dx != 0.0f)
 				InputManager::UpdatePointerRelativeDelta(0, InputPointerAxis::WheelX, dx);
 
-			const float dy = std::clamp(static_cast<float>(delta_angle.y()) / DELTA, -1.0f, 1.0f);
+			const float dy = std::clamp(static_cast<float>(delta_angle.y()) / QtUtils::MOUSE_WHEEL_DELTA, -1.0f, 1.0f);
 			if (dy != 0.0f)
 				InputManager::UpdatePointerRelativeDelta(0, InputPointerAxis::WheelY, dy);
 
@@ -376,10 +405,7 @@ bool DisplayWidget::event(QEvent* event)
 
 		case QEvent::Close:
 		{
-			// Closing the separate widget will either cancel the close, or trigger shutdown.
-			// In the latter case, it's going to destroy us, so don't let Qt do it first.
-			QMetaObject::invokeMethod(g_main_window, "requestShutdown", Q_ARG(bool, true), Q_ARG(bool, false), Q_ARG(bool, false));
-			event->ignore();
+			handleCloseEvent(static_cast<QCloseEvent*>(event));
 			return true;
 		}
 
@@ -405,15 +431,24 @@ DisplayContainer::DisplayContainer()
 
 DisplayContainer::~DisplayContainer() = default;
 
-bool DisplayContainer::IsNeeded(bool fullscreen, bool render_to_main)
+bool DisplayContainer::isNeeded(bool fullscreen, bool render_to_main)
 {
 #if defined(_WIN32) || defined(__APPLE__)
 	return false;
 #else
-	if (!fullscreen && render_to_main)
+	if (!isRunningOnWayland())
 		return false;
 
 	// We only need this on Wayland because of client-side decorations...
+	return (fullscreen || !render_to_main);
+#endif
+}
+
+bool DisplayContainer::isRunningOnWayland()
+{
+#if defined(_WIN32) || defined(__APPLE__)
+	return false;
+#else
 	const QString platform_name = QGuiApplication::platformName();
 	return (platform_name == QStringLiteral("wayland"));
 #endif
@@ -437,12 +472,9 @@ DisplayWidget* DisplayContainer::removeDisplayWidget()
 
 bool DisplayContainer::event(QEvent* event)
 {
-	if (event->type() == QEvent::Close)
+	if (event->type() == QEvent::Close && m_display_widget)
 	{
-		// Closing the separate widget will either cancel the close, or trigger shutdown.
-		// In the latter case, it's going to destroy us, so don't let Qt do it first.
-		QMetaObject::invokeMethod(g_main_window, "requestShutdown", Q_ARG(bool, true), Q_ARG(bool, false), Q_ARG(bool, false));
-		event->ignore();
+		m_display_widget->handleCloseEvent(static_cast<QCloseEvent*>(event));
 		return true;
 	}
 

@@ -42,7 +42,7 @@
       <AdditionalIncludeDirectories>$(SolutionDir)3rdparty\libpng;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalIncludeDirectories>$(SolutionDir)3rdparty\glad\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalIncludeDirectories>$(SolutionDir)3rdparty\cubeb\cubeb\include;$(SolutionDir)3rdparty\cubeb\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalIncludeDirectories>$(SolutionDir)3rdparty\imgui\imgui;$(SolutionDir)3rdparty\imgui\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)3rdparty\imgui\include;$(SolutionDir)3rdparty\imgui\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalIncludeDirectories>$(SolutionDir)3rdparty\libzip;$(SolutionDir)3rdparty\libzip\libzip\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalIncludeDirectories>$(SolutionDir)3rdparty\d3d12memalloc\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(SolutionDir)3rdparty\zstd\zstd\lib</AdditionalIncludeDirectories>
@@ -646,7 +646,7 @@
     <ClCompile Include="ps2\Iop\IopHwWrite.cpp" />
     <ClCompile Include="CDVD\Ps1CD.cpp" />
     <ClCompile Include="CDVD\CDVD.cpp" />
-    <ClCompile Include="CDVD\CDVDaccess.cpp" />
+    <ClCompile Include="CDVD\CDVDcommon.cpp" />
     <ClCompile Include="CDVD\CDVDisoReader.cpp" />
     <ClCompile Include="Ipu\IPU.cpp" />
     <ClCompile Include="Ipu\IPU_Fifo.cpp" />
@@ -1087,7 +1087,7 @@
     <ClInclude Include="CDVD\Ps1CD.h" />
     <ClInclude Include="CDVD\CDVD.h" />
     <ClInclude Include="CDVD\CDVD_internal.h" />
-    <ClInclude Include="CDVD\CDVDaccess.h" />
+    <ClInclude Include="CDVD\CDVDcommon.h" />
     <ClInclude Include="CDVD\CDVDisoReader.h" />
     <ClInclude Include="Ipu\IPU.h" />
     <ClInclude Include="Ipu\IPU_Fifo.h" />

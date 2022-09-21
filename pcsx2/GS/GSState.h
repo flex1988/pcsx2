@@ -185,7 +185,7 @@ protected:
 
 	void GrowVertexBuffer();
 	void HandleAutoFlush();
-	
+
 	template <u32 prim, bool auto_flush, bool index_swap>
 	void VertexKick(u32 skip);
 
@@ -217,6 +217,7 @@ protected:
 	bool IsOpaque();
 	bool IsMipMapDraw();
 	bool IsMipMapActive();
+	bool IsCoverageAlpha();
 
 public:
 	GIFPath m_path[4];
@@ -321,12 +322,13 @@ public:
 	void ResetHandlers();
 
 	int GetFramebufferHeight();
+	int GetFramebufferWidth();
 	int GetDisplayHMagnification();
 	GSVector4i GetDisplayRect(int i = -1);
 	GSVector4i GetFrameMagnifiedRect(int i = -1);
 	GSVector2i GetResolutionOffset(int i = -1);
 	GSVector2i GetResolution();
-	GSVector4i GetFrameRect(int i = -1);
+	GSVector4i GetFrameRect(int i = -1, bool ignore_off = false);
 	GSVideoMode GetVideoMode();
 
 	bool IsEnabled(int i);

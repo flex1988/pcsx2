@@ -79,12 +79,23 @@ public:
 	explicit MainWindow(const QString& unthemed_style_name);
 	~MainWindow();
 
+	/// Sets application theme according to settings.
+	static void updateApplicationTheme();
+
 	void initialize();
 	void connectVMThreadSignals(EmuThread* thread);
 	void startupUpdateCheck();
+	void resetSettings(bool ui);
 
 	/// Locks the VM by pausing it, while a popup dialog is displayed.
 	VMLock pauseAndLockVM();
+
+	/// Accessors for the status bar widgets, updated by the emulation thread.
+	__fi QLabel* getStatusVerboseWidget() const { return m_status_verbose_widget; }
+	__fi QLabel* getStatusRendererWidget() const { return m_status_renderer_widget; }
+	__fi QLabel* getStatusResolutionWidget() const { return m_status_resolution_widget; }
+	__fi QLabel* getStatusFPSWidget() const { return m_status_fps_widget; }
+	__fi QLabel* getStatusVPSWidget() const { return m_status_vps_widget; }
 
 public Q_SLOTS:
 	void checkForUpdates(bool display_message);
@@ -92,8 +103,9 @@ public Q_SLOTS:
 	void cancelGameListRefresh();
 	void invalidateSaveStateCache();
 	void reportError(const QString& title, const QString& message);
+	bool confirmMessage(const QString& title, const QString& message);
 	void runOnUIThread(const std::function<void()>& func);
-	bool requestShutdown(bool allow_confirm = true, bool allow_save_to_state = true, bool block_until_done = false);
+	bool requestShutdown(bool allow_confirm = true, bool allow_save_to_state = true, bool default_save_to_state = true, bool block_until_done = false);
 	void requestExit();
 	void checkForSettingChanges();
 
@@ -136,9 +148,8 @@ private Q_SLOTS:
 	void onAboutActionTriggered();
 	void onCheckForUpdatesActionTriggered();
 	void onToolsOpenDataDirectoryTriggered();
-	void onThemeChanged();
-	void onThemeChangedFromSettings();
-	void onLoggingOptionChanged();
+	void onToolsCoverDownloaderTriggered();
+	void updateTheme();
 	void onScreenshotActionTriggered();
 	void onSaveGSDumpActionTriggered();
 	void onBlockDumpActionToggled(bool checked);
@@ -156,9 +167,6 @@ private Q_SLOTS:
 	void onVMStopped();
 
 	void onGameChanged(const QString& path, const QString& serial, const QString& name, quint32 crc);
-	void onPerformanceMetricsUpdated(const QString& fps_stat, const QString& gs_stat);
-
-	void recreate();
 
 protected:
 	void showEvent(QShowEvent* event) override;
@@ -172,15 +180,19 @@ private:
 		NUM_SAVE_STATE_SLOTS = 10,
 	};
 
+	static void setStyleFromSettings();
+	static void setIconThemeFromStyle();
+
 	void setupAdditionalUi();
 	void connectSignals();
-	void setStyleFromSettings();
-	void setIconThemeFromStyle();
+	void recreate();
+	void recreateSettings();
 
 	void saveStateToConfig();
 	void restoreStateFromConfig();
 
 	void updateEmulationActions(bool starting, bool running);
+	void updateDisplayRelatedActions(bool has_surface, bool render_to_main, bool fullscreen);
 	void updateStatusBarWidgetVisibility();
 	void updateWindowTitle();
 	void updateWindowState(bool force_visible = false);
@@ -191,13 +203,16 @@ private:
 	bool isRenderingFullscreen() const;
 	bool isRenderingToMain() const;
 	bool shouldHideMouseCursor() const;
+	bool shouldHideMainWindow() const;
 	void switchToGameListView();
 	void switchToEmulationView();
 
+	QWidget* getContentParent();
 	QWidget* getDisplayContainer() const;
 	void saveDisplayWindowGeometryToConfig();
 	void restoreDisplayWindowGeometryFromConfig();
-	void destroyDisplayWidget();
+	void createDisplayWidget(bool fullscreen, bool render_to_main, bool is_exclusive_fullscreen);
+	void destroyDisplayWidget(bool show_game_list);
 	void setDisplayFullscreen(const std::string& fullscreen_mode);
 
 	SettingsDialog* getSettingsDialog();
@@ -234,14 +249,18 @@ private:
 	AutoUpdaterDialog* m_auto_updater_dialog = nullptr;
 
 	QProgressBar* m_status_progress_widget = nullptr;
-	QLabel* m_status_gs_widget = nullptr;
+	QLabel* m_status_verbose_widget = nullptr;
+	QLabel* m_status_renderer_widget = nullptr;
 	QLabel* m_status_fps_widget = nullptr;
+	QLabel* m_status_vps_widget = nullptr;
+	QLabel* m_status_resolution_widget = nullptr;
 
 	QString m_current_disc_path;
 	QString m_current_game_serial;
 	QString m_current_game_name;
 	quint32 m_current_game_crc;
 
+	bool m_display_created = false;
 	bool m_save_states_invalidated = false;
 	bool m_was_paused_on_surface_loss = false;
 	bool m_was_disc_change_request = false;
